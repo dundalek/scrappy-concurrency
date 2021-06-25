@@ -1,0 +1,2 @@
+{use-memo [[:inner 0]]
+ use-effect [[:inner 0]]}

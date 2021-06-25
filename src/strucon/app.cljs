@@ -1,0 +1,273 @@
+(ns strucon.app
+  (:require ["react-dom" :as rdom]
+            [goog.string :as gstr]
+            [helix.core :refer [$ <>]]
+            [helix.dom :as d]
+            [helix.hooks :as hooks]
+            [missionary.core :as m]
+            [strucon.lib :refer [defnc]]))
+
+(def track-height 20)
+(def colors ["red", "green", "blue"])
+
+(defn start-animation [f]
+  (let [!request (atom nil)]
+    (letfn [(animate [t]
+              (f t)
+              (reset! !request (js/requestAnimationFrame animate)))]
+      (reset! !request (js/requestAnimationFrame animate))
+      #(js/cancelAnimationFrame @!request))))
+
+(defn use-animation [f]
+  (hooks/use-effect []
+    (start-animation f)))
+
+(defn start-interval [f delay]
+  (let [interval-id (js/setInterval f delay)]
+    #(js/clearInterval interval-id)))
+
+(defn use-interval [f delay]
+  (hooks/use-effect []
+    (start-interval f delay)))
+
+(defn use-atom [sub-atom]
+  (let [sub (hooks/use-memo [sub-atom]
+              {:get-current-value #(deref sub-atom)
+               :subscribe (fn [f]
+                            (let [k (gensym "subscribe")]
+                              (add-watch sub-atom k f)
+                              #(remove-watch sub-atom k)))})]
+    (hooks/use-subscription sub)))
+
+(deftype TrackerInstance [cancel !state]
+  IFn
+  (-invoke [this] ((.-cancel this))))
+
+(declare tracker-start)
+(deftype TrackerTask [task !state]
+  IFn
+  (-invoke [this failure success] (tracker-start this failure success)))
+
+(defn tracker-start [^Tracker this success failure]
+  (let [!state (.-!state this)
+        task (.-task this)
+        _ (swap! !state assoc
+                 :state :running
+                 :start-time (js/Date.now))
+        cancel (task (fn [x]
+                       (swap! !state assoc
+                              :state :finished
+                              :end-time (js/Date.now))
+                       (success x))
+                     (fn [e]
+                       (if (-> e ex-data :cancelled)
+                         (swap! !state
+                                (fn [state]
+                                  (if (= (:state state) :waiting)
+                                    (assoc state
+                                           :state :dropped)
+                                    (assoc state
+                                           :state :canceled
+                                           :end-time (js/Date.now)))))
+                         (swap! !state assoc
+                                :state :error
+                                :end-time (js/Date.now)))
+                       (failure e)))]
+    (->TrackerInstance cancel !state)))
+
+(defn make-tracker [task]
+  (let [!state (atom {:state :waiting
+                      :perform-time (js/Date.now)
+                      :start-time nil
+                      :end-time nil})]
+    (->TrackerTask task !state)))
+
+(defn unbounded []
+  (fn [task]
+    (task (fn []) (fn []))))
+
+(defn restartable
+  ([] (restartable nil))
+  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
+   (let [!instances (atom [])]
+     (fn [task]
+       (swap! !instances (fn [instances]
+                           (filterv (fn [^TrackerInstance instance]
+                                      (= (:state @(.-!state instance)) :running))
+                                    instances)))
+       (when (>= (count @!instances) max-concurrency)
+         (when-some [instance (first @!instances)]
+           (instance)))
+       (swap! !instances conj (task (fn []) (fn [])))))))
+
+(defn enqueued
+  ([] (enqueued nil))
+  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
+   (let [!tasks (atom [])]
+     (letfn [(maybe-start []
+               (swap! !tasks (fn [tasks]
+                               (filterv (fn [^TrackerTask task]
+                                          (#{:running :waiting} (:state @(.-!state task))))
+                                        tasks)))
+               (let [running-count (->> @!tasks
+                                        (filter (fn [^TrackerTask task]
+                                                  (= (:state @(.-!state task)) :running)))
+                                        (count))]
+                 (when (< running-count max-concurrency)
+                   (when-some [waiting-task (->> @!tasks
+                                                 (some (fn [^TrackerTask task]
+                                                         (when (= (:state @(.-!state task)) :waiting)
+                                                           task))))]
+                     (waiting-task maybe-start maybe-start)))))]
+       (fn [task]
+         (swap! !tasks conj task)
+         (maybe-start))))))
+
+(defn dropping
+  ([] (dropping nil))
+  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
+   (let [!instances (atom [])]
+     (fn [^TrackerTask task]
+       (let [running-count (->> @!instances
+                                (filter (fn [^TrackerInstance instance]
+                                          (= (:state @(.-!state instance)) :running)))
+                                (count))]
+         (if (< running-count max-concurrency)
+           (swap! !instances conj (task (fn []) (fn [])))
+           (swap! (.-!state task) assoc :state :dropped)))))))
+
+(defn keeping-latest
+  ([] (keeping-latest nil))
+  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
+   (let [!tasks (atom [])]
+     (letfn [(maybe-start []
+               (swap! !tasks (fn [tasks]
+                               (filterv (fn [^TrackerTask task]
+                                          (#{:running :waiting} (:state @(.-!state task))))
+                                        tasks)))
+               (let [running-count (->> @!tasks
+                                        (filter (fn [^TrackerTask task]
+                                                  (= (:state @(.-!state task)) :running)))
+                                        (count))
+                     [waiting-task & additional-tasks] (->> @!tasks
+                                                            (filter (fn [^TrackerTask task]
+                                                                      (= (:state @(.-!state task)) :waiting))))]
+                 (if (< running-count max-concurrency)
+                   (when waiting-task
+                     (waiting-task maybe-start maybe-start))
+                   (when (pos? (count additional-tasks))
+                     (swap! (.-!state waiting-task) assoc :state :dropped)))))]
+       (fn [task]
+         (swap! !tasks conj task)
+         (maybe-start))))))
+
+(defnc Tracker [{:keys [tracker time scale-x]}]
+  (let [{:keys [id !state]} tracker
+        {:keys [state perform-time start-time end-time]} (use-atom !state)
+        color (get colors (mod id (count colors)))
+        y (* (mod id 6) track-height)]
+    (d/g {:height track-height}
+         (when-let [x (some-> start-time (scale-x))]
+           (let [width (Math/max 0
+                                 (- (scale-x (or end-time time))
+                                    x))]
+             (d/rect {:x x
+                      :y y
+                      :height track-height
+                      :width width
+                      :stroke "black"
+                      :fill color
+                      :fill-opacity "0.3"})))
+         (let [x (scale-x perform-time)]
+           (<>
+            (d/text {:x (+ x 5)
+                     :y (+ y 15)
+                     :font-family "sans-serif"
+                     :fill color
+                     :font-size 14
+                     :text-decoration (if (#{:canceled :dropped} state) "line-through" "none")
+                     :font-style (if start-time "normal" "italic")}
+                    (gstr/capitalize (name state)))
+            (d/line {:x1 x :y1 y :x2 x :y2 (+ y 20) :stroke color}))))))
+
+(defnc Graph [{:keys [perform]}]
+  (let [[time set-time] (hooks/use-state nil)
+        !start-time (hooks/use-ref nil)
+        !stop-animation (hooks/use-ref nil)
+        [!trackers] (hooks/use-state #(atom []))
+        trackers (use-atom !trackers)
+        scale-x (fn [x]
+                  (/ (- x @!start-time) 20))
+        perform! (fn []
+                   (when-not @!stop-animation
+                     (let [t (js/Date.now)]
+                       (reset! !start-time t)
+                       (reset! !stop-animation (start-animation #(set-time (js/Date.now))))
+                       (set-time t)))
+                   (let [tracker-task (make-tracker (m/sleep 1500))
+                         tracker {:id (count @!trackers)
+                                  :!state (.-!state tracker-task)}]
+                     (swap! !trackers conj tracker)
+                     (perform tracker-task)))
+        clear-timeline! (fn []
+                          (when-some [stop @!stop-animation]
+                            (stop)
+                            (reset! !stop-animation nil))
+                          (reset! !start-time nil)
+                          (set-time nil)
+                          (reset! !trackers []))]
+    (d/div
+     (d/div
+      (d/button {:on-click perform!}
+                "Perform")
+      (d/button {:on-click clear-timeline!}
+                "Clear Timeline"))
+        ; (d/button "Cancel all"))
+     (d/svg {:style {:width "100%"}}
+            (for [{:keys [id] :as tracker} trackers]
+              ($ Tracker {:key id
+                          :tracker tracker
+                          :time time
+                          :scale-x scale-x}))
+            (let [x (if time (scale-x time) 0)]
+              (d/line {:x1 x
+                       :y1 0
+                       :x2 x
+                       :y2 "100%"
+                       :stroke "black"}))))))
+
+(defnc App []
+  (d/div
+   (d/h1 "Welcome!")
+   (d/h2 "unbounded: Tasks run concurrently")
+   (d/div
+    ($ Graph {:perform (unbounded)}))
+   (d/h2 "restartable")
+   (d/div
+    ($ Graph {:perform (restartable)}))
+   (d/h2 "enqueue")
+   (d/div
+    ($ Graph {:perform (enqueued)}))
+   (d/h2 "drop")
+   (d/div
+    ($ Graph {:perform (dropping)}))
+   (d/h2 "keepLatest")
+   (d/div
+    ($ Graph {:perform (keeping-latest)}))
+   (d/h2 "restartable with max-concurrency: 3")
+   (d/div
+    ($ Graph {:perform (restartable {:max-concurrency 3})}))
+   (d/h2 "enqueue with max-concurrency: 3")
+   (d/div
+    ($ Graph {:perform (enqueued {:max-concurrency 3})}))
+   (d/h2 "drop with max-concurrency: 3")
+   (d/div
+    ($ Graph {:perform (dropping {:max-concurrency 3})}))
+   (d/h2 "keepLatest with max-concurrency: 3")
+   (d/div
+    ($ Graph {:perform (keeping-latest {:max-concurrency 3})}))))
+
+(defn ^:export main
+  []
+  (rdom/render ($ App) (js/document.getElementById "app")))
+
