@@ -82,9 +82,33 @@
                       :end-time nil})]
     (->TrackerTask task !state)))
 
+(defprotocol Scheduler
+  (cancel-all [this]))
+
+(declare unbounded-start)
+(declare unbounded-cancel-all)
+(deftype Unbounded [instances]
+  IFn
+  (-invoke [this task] (unbounded-start this task))
+
+  Scheduler
+  (cancel-all [this] (unbounded-cancel-all this)))
+
+(defn unbounded-start [^Unbounded this task]
+  (let [instance (task (fn []) (fn []))]
+    (set! (.-instances this)
+          (-> (filterv (fn [^TrackerInstance instance]
+                         (= (:state @(.-!state instance)) :running))
+                       (.-instances this))
+              (conj instance)))
+    instance))
+
+(defn unbounded-cancel-all [^Unbounded this]
+  (doseq [instance (.-instances this)]
+    (instance)))
+
 (defn unbounded []
-  (fn [task]
-    (task (fn []) (fn []))))
+  (->Unbounded []))
 
 (defn restartable
   ([] (restartable nil))
@@ -236,9 +260,139 @@
                        :y2 "100%"
                        :stroke "black"}))))))
 
+(defnc TaskFunctionSyntax []
+  (let [[status set-status] (hooks/use-state nil)
+        [scheduler] (hooks/use-state unbounded)
+        task (fn []
+               (make-tracker
+                (m/sp
+                 (set-status "Gimme one second...")
+                 (m/? (m/sleep 1000))
+                 (set-status "Gimme one more second...")
+                 (m/? (m/sleep 1000))
+                 (set-status "OK, I'm done."))))]
+    (d/div
+     (d/button {:on-click #(scheduler (task))}
+               "Wait A Few Seconds")
+     (d/span status))))
+
+(defnc CancelationDemo []
+  (let [[counter set-counter] (hooks/use-state 0)
+        [most-recent set-most-recent] (hooks/use-state nil)
+        most-recent-state (:state (use-atom (or (some-> most-recent .-!state)
+                                                (atom nil))))
+        [scheduler] (hooks/use-state unbounded)
+        task (fn []
+               (make-tracker
+                (m/sp
+                 (try
+                   (set-counter + 1)
+                   (m/? m/never)
+                   (finally
+                     (set-counter - 1))))))]
+    (d/div
+     (d/div "Running tasks: " counter)
+     (d/button {:on-click #(set-most-recent (scheduler (task)))}
+               "Perform Task")
+     (when (pos? counter)
+       (d/button {:on-click #(cancel-all scheduler)} "Cancel All"))
+     (when (= most-recent-state :running)
+       (d/button {:on-click #(most-recent)}
+                 "Cancel Most Recent")))))
+
+(defnc ErrorsVsCancelation []
+  (let [[num-completions set-num-completions] (hooks/use-state 0)
+        [num-errors set-num-errors] (hooks/use-state 0)
+        [num-finallys set-num-finallys] (hooks/use-state 0)
+        [scheduler] (hooks/use-state restartable)
+        task (fn [error?]
+               (make-tracker
+                (m/sp
+                 (try
+                   (m/? (m/sleep 1000))
+                    ;; Difference to ember-concurrency, because it uses generators the completion counter can be outside of the try-catch
+                   (set-num-completions + 1)
+                   (when error?
+                     (throw (js/Error. "Boom")))
+                   (catch :default e
+                      ;; This is difference to ember-concurrency, which does not consider cancellation an error
+                      ;; Maybe reconsider later
+                     (when-not (-> e ex-data :cancelled)
+                       (set-num-errors + 1)))
+                   (finally
+                     (set-num-finallys + 1))))))]
+
+    (d/div
+     (d/button {:on-click #(scheduler (task false))}
+               "Run to Completion")
+     (d/button {:on-click #(scheduler (task true))}
+               "Throw an Error")
+     (d/ul
+        ;; TODO: task (scheduler) state
+      (d/li "Task state: ")
+      (d/li "Completions: " num-completions)
+      (d/li "Errors: " num-errors)
+      (d/li "Finally block runs: " num-finallys)))))
+
+(defnc ChildTasks []
+  (let [[status set-status] (hooks/use-state "Waiting to start")
+        [scheduler] (hooks/use-state restartable)
+        grandchild-task (m/sp
+                         (set-status "3. Grandchild: one moment...")
+                         (m/? (m/sleep 1000))
+                         "Hello")
+        child-task (m/sp
+                    (set-status "2. Child: one moment...")
+                    (m/? (m/sleep 1000))
+                    (let [value (m/? grandchild-task)]
+                      (set-status (str "4. Child: grandchild says \"" value "\"")))
+                    (m/? (m/sleep 1000))
+                    "What's up")
+        parent-task (m/sp
+                     (set-status "1. Parent: one moment...")
+                     (m/? (m/sleep 1000))
+                     (let [value (m/? child-task)]
+                       (set-status (str "5. Parent: child says \"" value "\"")))
+                     (m/? (m/sleep 1000))
+                     (set-status "6. Done!"))]
+    (d/div
+     (d/div status)
+     (d/ul
+       ;; TODO task states
+       (d/li "Parent Task: ")
+       (d/li "Child Task: ")
+       (d/li "Grandchild Task: "))
+     (d/button {:on-click #(scheduler (make-tracker parent-task))}
+               "Perform Parent Task"))))
+
+(def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
+
+(defn make-random-url []
+  (str "https://www." (rand-nth words) ".edu"))
+
+(defnc EncapsulatedTasks []
+  (d/div
+    (d/button {}
+              "Start Upload")
+    (d/div "Queued Uploads: ")
+    (d/div "Uploading to ")
+    (d/div {:style {:color "green" :font-weight "bold"}}
+           "Uploading to ")))
+
+
 (defnc App []
   (d/div
    (d/h1 "Welcome!")
+   (d/h2 "Task Function Syntax")
+   ($ TaskFunctionSyntax)
+   (d/h2 "Cancelation")
+   ($ CancelationDemo)
+   (d/h2 "Errors vs Cancelation")
+   ($ ErrorsVsCancelation)
+   (d/h2 "Child Tasks")
+   ($ ChildTasks)
+   (d/h2 "Encapsulated Tasks")
+   ($ EncapsulatedTasks)
    (d/h2 "unbounded: Tasks run concurrently")
    (d/div
     ($ Graph {:perform (unbounded)}))
