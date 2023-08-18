@@ -1,12 +1,20 @@
 {:deps true
 
+ ; :source-paths ["src" "test"]
+
+ :dev-http {8888 ["build" "public" "build/test"]}
+
+ :nrepl {:write-port-file true}
+
  :builds
  {:app {:target :browser
-        :output-dir "js"
+        :output-dir "build/js"
         :asset-path "/js"
-        :modules {:app {:entries [strucon.app]}}
-        :devtools {:http-root "."
-                   :http-port 8888
-                   :reload-strategy :full
+        :modules {:app {:entries [strucon.app]
+                        :init-fn strucon.app/main}}
+        :devtools {:reload-strategy :full
                    :preloads [devtools.preload
-                              strucon.dev]}}}}
+                              strucon.dev]}}
+
+  :test {:target :browser-test
+         :test-dir "build/test"}}}

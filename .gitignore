@@ -5,3 +5,5 @@ js/
 /.cpcache
 /.clj-kondo/.cache/
 /.lsp
+/build
+.nrepl-port
