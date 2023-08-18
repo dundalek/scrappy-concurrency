@@ -34,6 +34,16 @@
          (fn [coll]
            (filterv (complement #{x}) coll))))
 
+(defn- start-task! [!current task s f]
+  (let [!instance (atom nil)
+        instance (task (fn [x]
+                         (remove-task! !current @!instance)
+                         (s x))
+                       f)]
+    (reset! !instance instance)
+    (swap! !current conj instance)
+    nil))
+
 (defn restartable
   ([] (restartable {}))
   ([{:keys [max-concurrency]}]
@@ -47,17 +57,12 @@
           (let [cancel (first @!current)]
             (remove-task! !current cancel)
             (cancel)))
-        (let [!instance (atom nil)
-              instance (task (fn []
-                               (remove-task! !current @!instance)
-                               (when (empty? @!current)
-                                 (when (ifn? @!s)
-                                   (@!s))))
-                             (fn []
-                               (remove-task! !current @!instance)))]
-          (swap! !current conj instance)
-          (reset! !instance instance)
-          nil))
+        (start-task! !current task
+                     (fn []
+                       (when (empty? @!current)
+                         (when (ifn? @!s)
+                           (@!s))))
+                     (fn [])))
        ([s f]
         (reset! !s s))))))
 
@@ -65,13 +70,9 @@
   (when (< (count @!current) max-concurrency)
     (when-some [task (peek @!queue)]
       (swap! !queue pop)
-      (let [!instance (atom nil)
-            instance (task (fn []
-                             (remove-task! !current @!instance)
-                             (enqueued-maybe-start max-concurrency !current !queue))
-                           (fn []))]
-        (reset! !instance instance)
-        (swap! !current conj instance)))))
+      (start-task! !current task
+                   (fn [] (enqueued-maybe-start max-concurrency !current !queue))
+                   (fn [])))))
 
 (defn enqueued
   ([] (enqueued {}))
@@ -95,30 +96,23 @@
      (fn
        ([task]
         (when (< (count @!current) max-concurrency)
-          (let [!instance (atom nil)
-                instance (task (fn []
-                                 (remove-task! !current @!instance)
-                                 (when (empty? @!current)
-                                   (when (ifn? @!s)
-                                     (@!s))))
-                               (fn []))]
-            (reset! !instance instance)
-            (swap! !current conj instance)
-            nil)))
+          (start-task! !current task
+                       (fn []
+                         (when (empty? @!current)
+                           (when (ifn? @!s)
+                             (@!s))))
+                       (fn []))))
        ([s f]
         (reset! !s s))))))
 
 (defn- keeping-latest-maybe-start [max-concurrency !current !waiting !s]
   (when (< (count @!current) max-concurrency)
     (if-some [task @!waiting]
-      (let [!instance (atom nil)
-            _  (reset! !waiting nil)
-            instance (task (fn []
-                             (remove-task! !current @!instance)
-                             (keeping-latest-maybe-start max-concurrency !current !waiting !s))
-                           (fn []))]
-        (reset! !instance instance)
-        (swap! !current conj instance))
+      (do
+        (reset! !waiting nil)
+        (start-task! !current task
+                     (fn [] (keeping-latest-maybe-start max-concurrency !current !waiting !s))
+                     (fn [])))
       (when (empty? @!current)
         (when (ifn? @!s)
           (@!s))))))
