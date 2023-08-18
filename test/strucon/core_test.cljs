@@ -4,14 +4,19 @@
    [missionary.core :as m]
    [strucon.core :as core]))
 
+(defn- task-helper []
+  (let [!results (atom [])
+        make-task  (fn [x]
+                     (m/sp
+                      (swap! !results conj [:begin x])
+                      (m/? (m/sleep 0))
+                      (swap! !results conj [:end x])))]
+    {:make-task make-task
+     :!results !results}))
+
 (deftest unbounded
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/unbounded)]
            ((m/sp
              (perform (make-task 1))
@@ -33,12 +38,7 @@
 
 (deftest restartable-one
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/restartable)]
            ((m/sp
              (perform (make-task 1))
@@ -49,12 +49,7 @@
 
 (deftest restartable-multiple
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/restartable)]
            ((m/sp
              (perform (make-task 1))
@@ -69,12 +64,7 @@
 
 (deftest enqueued
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/enqueued)]
            ((m/sp
              (perform (make-task 1))
@@ -94,12 +84,7 @@
 
 (deftest dropping
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/dropping)]
            ((m/sp
              (perform (make-task 1))
@@ -118,12 +103,7 @@
 
 (deftest keeping-latest
   (async done
-         (let [!results (atom [])
-               make-task  (fn [x]
-                            (m/sp
-                             (swap! !results conj [:begin x])
-                             (m/? (m/sleep 0))
-                             (swap! !results conj [:end x])))
+         (let [{:keys [make-task !results]} (task-helper)
                perform (core/keeping-latest)]
            ((m/sp
              (perform (make-task 1))
