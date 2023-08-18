@@ -4,15 +4,17 @@
    [missionary.core :as m]
    [strucon.core :as core]))
 
-(defn- task-helper []
-  (let [!results (atom [])
-        make-task  (fn [x]
-                     (m/sp
-                      (swap! !results conj [:begin x])
-                      (m/? (m/sleep 0))
-                      (swap! !results conj [:end x])))]
-    {:make-task make-task
-     :!results !results}))
+(defn- task-helper
+  ([] (task-helper nil))
+  ([{:keys [sleep] :or {sleep 0}}]
+   (let [!results (atom [])
+         make-task  (fn [x]
+                      (m/sp
+                       (swap! !results conj [:begin x])
+                       (m/? (m/sleep sleep))
+                       (swap! !results conj [:end x])))]
+     {:make-task make-task
+      :!results !results})))
 
 (deftest unbounded
   (async done
@@ -62,6 +64,22 @@
                     @!results))
              (done))))))
 
+(deftest restartable-max-concurrency
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/restartable {:max-concurrency 2})]
+           ((m/sp
+             (perform (make-task 1))
+             (perform (make-task 2))
+             (perform (make-task 3))
+             (perform (make-task 4))
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:begin 4]]
+                    @!results))
+             (m/? perform)
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:begin 4] [:end 3] [:end 4]]
+                    @!results))
+             (done))))))
+
 (deftest enqueued
   (async done
          (let [{:keys [make-task !results]} (task-helper)
@@ -82,6 +100,29 @@
                     @!results))
              (done))))))
 
+(deftest enqueued-max-concurrency
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/enqueued {:max-concurrency 2})]
+           ((m/sp
+             (perform (make-task 1))
+             (perform (make-task 2))
+             (perform (make-task 3))
+             (is (= [[:begin 1]
+                     [:begin 2]]
+                    @!results))
+             (m/? (m/sleep 10))
+             ; (m/? perform)
+             (is (= [[:begin 1]
+                     [:begin 2]
+                     [:end 1]
+                     ;; is begin 3 before end 3 ok or should we schedule on next tick?
+                     [:begin 3]
+                     [:end 2]
+                     [:end 3]]
+                    @!results))
+             (done))))))
+
 (deftest dropping
   (async done
          (let [{:keys [make-task !results]} (task-helper)
@@ -93,11 +134,30 @@
              (is (= [[:begin 1]] @!results))
              (m/? perform)
              (is (= [[:begin 1] [:end 1]] @!results))
-             (m/? (m/sleep 1))
              (perform (make-task 4))
              (m/? perform)
              (is (= [[:begin 1] [:end 1]
                      [:begin 4] [:end 4]]
+                    @!results))
+             (done))))))
+
+(deftest dropping-max-concurrency
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/dropping {:max-concurrency 2})]
+           ((m/sp
+             (perform (make-task 1))
+             (perform (make-task 2))
+             (perform (make-task 3))
+             (perform (make-task 4))
+             (is (= [[:begin 1] [:begin 2]] @!results))
+             (m/? perform)
+             (is (= [[:begin 1] [:begin 2] [:end 1] [:end 2]] @!results))
+             (perform (make-task 5))
+             (m/? perform)
+             (is (= [[:begin 1] [:begin 2]
+                     [:end 1] [:end 2]
+                     [:begin 5] [:end 5]]
                     @!results))
              (done))))))
 
@@ -110,14 +170,38 @@
              (perform (make-task 2))
              (perform (make-task 3))
              (is (= [[:begin 1]] @!results))
-             (m/? (m/sleep 5))
+             (m/? perform)
              (is (= [[:begin 1] [:end 1]
                      [:begin 3] [:end 3]]
                     @!results))
              (perform (make-task 4))
-             (m/? (m/sleep 5))
+             (m/? perform)
              (is (= [[:begin 1] [:end 1]
                      [:begin 3] [:end 3]
                      [:begin 4] [:end 4]]
+                    @!results))
+             (done))))))
+
+(deftest keeping-latest-max-concurrency
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/keeping-latest {:max-concurrency 2})]
+           ((m/sp
+             (perform (make-task 1))
+             (perform (make-task 2))
+             (perform (make-task 3))
+             (perform (make-task 4))
+             (is (= [[:begin 1] [:begin 2]] @!results))
+             (m/? perform)
+             (is (= [[:begin 1] [:begin 2]
+                     [:end 1] [:begin 4]
+                     [:end 2] [:end 4]]
+                    @!results))
+             (perform (make-task 5))
+             (m/? perform)
+             (is (= [[:begin 1] [:begin 2]
+                     [:end 1] [:begin 4]
+                     [:end 2] [:end 4]
+                     [:begin 5] [:end 5]]
                     @!results))
              (done))))))
