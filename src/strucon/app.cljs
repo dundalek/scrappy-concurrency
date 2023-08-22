@@ -70,35 +70,45 @@
   (-remove-watch [_ key]
     (-remove-watch !state key)))
 
+(defn- instance-state-map [state]
+  {:state state
+   :started? (not= state :waiting) ; rename to idle?
+   :canceled? (= state :canceled)
+   :error? (= state :error)
+   :finished? (or (= state :canceled)
+                  (= state :finished)
+                  (= state :error))
+   :successful? (= state :finished)}) ; proably rename :finished to success
+
 (defn tracker-start [!state task success failure]
-  (swap! !state assoc
-         :state :running
-         :start-time (js/Date.now))
+  (swap! !state merge
+         (instance-state-map :running)
+         {:start-time (js/Date.now)})
   (let [cancel (task (fn [x]
-                       (swap! !state assoc
-                              :state :finished
-                              :value x
-                              :end-time (js/Date.now))
+                       (swap! !state merge
+                              (instance-state-map :finished)
+                              {:value x
+                               :end-time (js/Date.now)})
                        (success x))
                      (fn [e]
                        (if (-> e ex-data :cancelled)
-                         (swap! !state assoc
-                                :state :canceled
-                                :end-time (js/Date.now))
-                         (swap! !state assoc
-                                :state :error
-                                :error e
-                                :end-time (js/Date.now)))
+                         (swap! !state merge
+                                (instance-state-map :canceled)
+                                {:end-time (js/Date.now)})
+                         (swap! !state merge
+                                (instance-state-map :error)
+                                {:error e
+                                 :end-time (js/Date.now)}))
                        (failure e)))]
     cancel))
 
 (defn make-tracker [task]
-  (let [!state (atom {:state :waiting
-                      :perform-time (js/Date.now)
-                      :start-time nil
-                      :end-time nil
-                      :value nil
-                      :error nil})]
+  (let [!state (atom (assoc (instance-state-map :waiting)
+                            :perform-time (js/Date.now)
+                            :start-time nil
+                            :end-time nil
+                            :value nil
+                            :error nil))]
     (->TaskInstance task !state)))
 
 (defn format-task-status [status]
