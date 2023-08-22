@@ -52,15 +52,23 @@
                               #(remove-watch sub-atom k)))})]
     (hooks/use-subscription sub)))
 
-(deftype TrackerInstance [cancel !state]
-  IFn
-  (-invoke [this] ((.-cancel this))))
-
 (declare tracker-start)
-(deftype TrackerTask [task !state]
+(deftype TaskInstance [task !state]
   IFn
-  (-invoke [this failure success]
-    (tracker-start !state task failure success)))
+  (-invoke [_ failure success]
+    (assert (= (:state @!state) :waiting) "Tracked task should be started only once.")
+    (tracker-start !state task failure success))
+
+  IDeref
+  (-deref [_] @!state)
+
+  IWatchable
+  (-notify-watches [_ oldval newval]
+    (-notify-watches !state oldval newval))
+  (-add-watch [_ key f]
+    (-add-watch !state key f))
+  (-remove-watch [_ key]
+    (-remove-watch !state key)))
 
 (defn tracker-start [!state task success failure]
   (swap! !state assoc
@@ -82,7 +90,7 @@
                                 :error e
                                 :end-time (js/Date.now)))
                        (failure e)))]
-    (->TrackerInstance cancel !state)))
+    cancel))
 
 (defn make-tracker [task]
   (let [!state (atom {:state :waiting
@@ -91,24 +99,15 @@
                       :end-time nil
                       :value nil
                       :error nil})]
-    (->TrackerTask task !state)))
-
-(defn use-task-tracker [task]
-  (first (hooks/use-state
-          (fn []
-            (make-tracker
-             task)))))
-
-(defn use-task-tracker-state [^TrackerTask tracker]
-  (:state (use-atom (some-> tracker .-!state))))
+    (->TaskInstance task !state)))
 
 (defn format-task-status [status]
   (if (= status :running)
     "running"
     "idle"))
 
-(defnc Tracker [{:keys [id ^TrackerTask tracker time scale-x waiting?]}]
-  (let [{:keys [state perform-time start-time end-time]} (use-atom (.-!state tracker))
+(defnc Tracker [{:keys [id tracker time scale-x waiting?]}]
+  (let [{:keys [state perform-time start-time end-time]} (use-atom tracker)
         state (if (and (= :waiting state) (not (waiting? tracker)))
                 :dropped
                 state)
@@ -197,13 +196,15 @@
 
 (defnc CancelationDemo []
   (let [[counter set-counter] (hooks/use-state 0)
-        [cancel-most-recent set-cancel-most-recent] (hooks/use-state nil)
+        [cancel-most-recent set-cancel-most-recent!] (hooks/use-state nil)
         [perform] (hooks/use-state #(core/unbounded))
-        [!tracker-state] (hooks/use-state #(atom nil))
+        [!tracker set-tracker!] (hooks/use-state #(atom {}))
         perform! (fn [task]
                    (perform (fn [s f]
-                              (let [cancel ((->TrackerTask task !tracker-state) s f)]
-                                (set-cancel-most-recent cancel)
+                              (let [tracker (make-tracker task)
+                                    cancel (tracker s f)]
+                                (set-tracker! tracker)
+                                (set-cancel-most-recent! cancel)
                                 cancel))))
         task (m/sp
               (try
@@ -211,8 +212,7 @@
                 (m/? m/never)
                 (finally
                   (set-counter dec))))
-        {:keys [state]} (use-atom !tracker-state)]
-
+        {:keys [state]} (use-atom !tracker)]
     (d/div
      (d/div "Running tasks: " counter)
      (d/button {:on-click #(perform! task)}
@@ -228,9 +228,11 @@
         [num-errors set-num-errors] (hooks/use-state 0)
         [num-finallys set-num-finallys] (hooks/use-state 0)
         [perform] (hooks/use-state #(core/restartable))
-        [!tracker-state] (hooks/use-state #(atom nil))
+        [!tracker set-tracker!] (hooks/use-state #(atom {}))
         perform (fn [task]
-                  (perform (->TrackerTask task !tracker-state)))
+                  (let [tracker (make-tracker task)]
+                    (set-tracker! tracker)
+                    (perform tracker)))
         task (fn [error?]
                (m/sp
                 (try
@@ -246,7 +248,7 @@
                       (set-num-errors inc)))
                   (finally
                     (set-num-finallys inc)))))
-        {:keys [state]} (use-atom !tracker-state)]
+        {:keys [state]} (use-atom !tracker)]
     (d/div
      (d/button {:on-click #(perform (task false))}
                "Run to Completion")
@@ -258,48 +260,54 @@
       (d/li "Errors: " num-errors)
       (d/li "Finally block runs: " num-finallys)))))
 
-(defnc ChildTasks []
-  (let [[status set-status] (hooks/use-state "Waiting to start")
-        [perform] (hooks/use-state #(core/restartable))
-        grandchild-task (use-task-tracker
+(defn make-demo-tasks [set-status!]
+  (let [grandchild-task (make-tracker
                          (m/sp
-                          (set-status "3. Grandchild: one moment...")
+                          (set-status! "3. Grandchild: one moment...")
                           (m/? (m/sleep 1000))
                           "Hello"))
-        child-task (use-task-tracker
+        child-task (make-tracker
                     (m/sp
-                     (set-status "2. Child: one moment...")
+                     (set-status! "2. Child: one moment...")
                      (m/? (m/sleep 1000))
                      (let [value (m/? grandchild-task)]
-                       (set-status (str "4. Child: grandchild says \"" value "\"")))
+                       (set-status! (str "4. Child: grandchild says \"" value "\"")))
                      (m/? (m/sleep 1000))
                      "What's up"))
-        parent-task (use-task-tracker
+        parent-task (make-tracker
                      (m/sp
-                      (set-status "1. Parent: one moment...")
+                      (set-status! "1. Parent: one moment...")
                       (m/? (m/sleep 1000))
                       (let [value (m/? child-task)]
-                        (set-status (str "5. Parent: child says \"" value "\"")))
+                        (set-status! (str "5. Parent: child says \"" value "\"")))
                       (m/? (m/sleep 1000))
-                      (set-status "6. Done!")))
-        parent-task-state (use-task-tracker-state parent-task)
-        child-task-state (use-task-tracker-state child-task)
-        grandchild-task-state (use-task-tracker-state grandchild-task)]
+                      (set-status! "6. Done!")))]
+    {:grandchild-task grandchild-task
+     :child-task child-task
+     :parent-task parent-task}))
+
+(defnc ChildTasks []
+  (let [[status set-status!] (hooks/use-state "Waiting to start")
+        [tasks set-tasks!] (hooks/use-state (fn [] (make-demo-tasks set-status!)))
+        [perform] (hooks/use-state #(core/restartable))
+        perform! (fn []
+                   (let [{:keys [parent-task] :as tasks} (make-demo-tasks set-status!)]
+                     (set-tasks! tasks)
+                     (perform parent-task)))
+        {:keys [parent-task child-task grandchild-task]} tasks
+        {parent-task-state :state} (use-atom parent-task)
+        {child-task-state :state} (use-atom child-task)
+        {grandchild-task-state :state} (use-atom grandchild-task)]
     (d/div
      (d/div status)
      (d/ul
       (d/li "Parent Task: " (format-task-status parent-task-state))
       (d/li "Child Task: " (format-task-status child-task-state))
       (d/li "Grandchild Task: " (format-task-status grandchild-task-state)))
-     (d/button {:on-click #(perform parent-task)}
+     (d/button {:on-click #(perform!)}
                (if (= parent-task-state :running)
                  "Restart Parent Task"
                  "Perform Parent Task")))))
-
-(def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
-
-(defn make-random-url []
-  (str "https://www." (rand-nth words) ".edu"))
 
 (defnc App []
   (d/div

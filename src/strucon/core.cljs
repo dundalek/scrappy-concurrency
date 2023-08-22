@@ -54,7 +54,9 @@
         instance (task (fn [x]
                          (remove-task! !current @!instance)
                          (s x))
-                       f)]
+                       (fn [e]
+                         (remove-task! !current @!instance)
+                         (f e)))]
     (reset! !instance instance)
     (swap! !current conj instance)
     nil))
