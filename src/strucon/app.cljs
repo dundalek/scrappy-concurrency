@@ -20,17 +20,28 @@
       (reset! !request (js/requestAnimationFrame animate))
       #(js/cancelAnimationFrame @!request))))
 
-(defn use-animation [f]
-  (hooks/use-effect []
-    (start-animation f)))
-
-(defn start-interval [f delay]
-  (let [interval-id (js/setInterval f delay)]
-    #(js/clearInterval interval-id)))
-
-(defn use-interval [f delay]
-  (hooks/use-effect []
-    (start-interval f delay)))
+(defn use-animation []
+  (let [[time set-time!] (hooks/use-state nil)
+        [start-time set-start-time!] (hooks/use-state nil)
+        !stop-animation (hooks/use-ref nil)
+        start (hooks/use-callback*
+               (fn []
+                 (when-not @!stop-animation
+                   (let [t (js/Date.now)]
+                     (reset! !stop-animation (start-animation #(set-time! (js/Date.now))))
+                     (set-start-time! t)
+                     (set-time! t)))))
+        stop (hooks/use-callback*
+              (fn []
+                (when-some [stop @!stop-animation]
+                  (stop)
+                  (reset! !stop-animation nil))
+                (set-start-time! nil)
+                (set-time! nil)))]
+    {:start-time start-time
+     :time time
+     :start start
+     :stop stop}))
 
 (defn use-atom [sub-atom]
   (let [sub (hooks/use-memo [sub-atom]
@@ -131,19 +142,12 @@
             (d/line {:x1 x :y1 y :x2 x :y2 (+ y 20) :stroke color}))))))
 
 (defnc Graph [{:keys [perform]}]
-  (let [[time set-time] (hooks/use-state nil)
-        !start-time (hooks/use-ref nil)
-        !stop-animation (hooks/use-ref nil)
+  (let [{:keys [start-time time start stop]} (use-animation)
         [!trackers] (hooks/use-state #(atom []))
         trackers (use-atom !trackers)
-        scale-x (fn [x]
-                  (/ (- x @!start-time) 20))
+        scale-x (fn [x] (/ (- x start-time) 20))
         perform! (fn []
-                   (when-not @!stop-animation
-                     (let [t (js/Date.now)]
-                       (reset! !start-time t)
-                       (reset! !stop-animation (start-animation #(set-time (js/Date.now))))
-                       (set-time t)))
+                   (start)
                    (let [tracker-task (make-tracker (m/sleep 1500))
                          tracker {:id (count @!trackers)
                                   :!state (.-!state tracker-task)
@@ -151,11 +155,7 @@
                      (swap! !trackers conj tracker)
                      (perform tracker-task)))
         clear-timeline! (fn []
-                          (when-some [stop @!stop-animation]
-                            (stop)
-                            (reset! !stop-animation nil))
-                          (reset! !start-time nil)
-                          (set-time nil)
+                          (stop)
                           (reset! !trackers []))
         waiting? (set (core/waiting perform))]
     (d/div
