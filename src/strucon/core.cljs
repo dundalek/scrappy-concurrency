@@ -1,5 +1,8 @@
 (ns strucon.core)
 
+(defprotocol Waiting
+  (waiting [_]))
+
 (declare unbounded-start)
 
 (deftype Unbounded [^:mutable instances
@@ -8,7 +11,9 @@
   (-invoke [this task]
     (unbounded-start this task))
   (-invoke [this s f]
-    (set! (.-success this) s)))
+    (set! (.-success this) s))
+  Waiting
+  (waiting [_] []))
 
 (defn unbounded-start [^Unbounded this task]
   (let [!instance (atom nil)
@@ -51,20 +56,23 @@
          !current (atom [])
          !s (atom nil)]
      (assert (pos? max-concurrency))
-     (fn
-       ([task]
-        (when (<= max-concurrency (count @!current))
-          (let [cancel (first @!current)]
-            (remove-task! !current cancel)
-            (cancel)))
-        (start-task! !current task
-                     (fn []
-                       (when (empty? @!current)
-                         (when (ifn? @!s)
-                           (@!s))))
-                     (fn [])))
-       ([s f]
-        (reset! !s s))))))
+     (reify
+       IFn
+       (-invoke [_ task]
+         (when (<= max-concurrency (count @!current))
+           (let [cancel (first @!current)]
+             (remove-task! !current cancel)
+             (cancel)))
+         (start-task! !current task
+                      (fn []
+                        (when (empty? @!current)
+                          (when (ifn? @!s)
+                            (@!s))))
+                      (fn [])))
+       (-invoke [_ s f]
+         (reset! !s s))
+       Waiting
+       (waiting [_] [])))))
 
 (defn enqueued-maybe-start [max-concurrency !current !queue]
   (when (< (count @!current) max-concurrency)
@@ -81,10 +89,14 @@
          !current (atom [])
          !queue (atom #queue [])]
      (assert (pos? max-concurrency))
-     (fn [task]
-       (swap! !queue conj task)
-       (enqueued-maybe-start max-concurrency !current !queue)
-       nil))))
+     (reify
+       IFn
+       (-invoke [_ task]
+         (swap! !queue conj task)
+         (enqueued-maybe-start max-concurrency !current !queue)
+         nil)
+       Waiting
+       (waiting [_] (seq @!queue))))))
 
 (defn dropping
   ([] (dropping {}))
@@ -93,17 +105,20 @@
          !current (atom [])
          !s (atom nil)]
      (assert (pos? max-concurrency))
-     (fn
-       ([task]
-        (when (< (count @!current) max-concurrency)
-          (start-task! !current task
-                       (fn []
-                         (when (empty? @!current)
-                           (when (ifn? @!s)
-                             (@!s))))
-                       (fn []))))
-       ([s f]
-        (reset! !s s))))))
+     (reify
+       IFn
+       (-invoke [_ task]
+         (when (< (count @!current) max-concurrency)
+           (start-task! !current task
+                        (fn []
+                          (when (empty? @!current)
+                            (when (ifn? @!s)
+                              (@!s))))
+                        (fn []))))
+       (-invoke [_ s f]
+         (reset! !s s))
+       Waiting
+       (waiting [_] [])))))
 
 (defn- keeping-latest-maybe-start [max-concurrency !current !waiting !s]
   (when (< (count @!current) max-concurrency)
@@ -125,10 +140,15 @@
          !waiting (atom nil)
          !s (atom nil)]
      (assert (pos? max-concurrency))
-     (fn
-       ([task]
-        (reset! !waiting task)
-        (keeping-latest-maybe-start max-concurrency !current !waiting !s)
-        nil)
-       ([s f]
-        (reset! !s s))))))
+     (reify
+       IFn
+       (-invoke [_ task]
+         (reset! !waiting task)
+         (keeping-latest-maybe-start max-concurrency !current !waiting !s))
+       (-invoke [_ s f]
+         (reset! !s s))
+       Waiting
+       (waiting [_]
+         (if @!waiting
+           [@!waiting]
+           []))))))

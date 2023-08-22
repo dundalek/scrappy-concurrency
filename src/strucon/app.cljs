@@ -1,11 +1,13 @@
 (ns strucon.app
-  (:require ["react-dom" :as rdom]
-            [goog.string :as gstr]
-            [helix.core :refer [$ <>]]
-            [helix.dom :as d]
-            [helix.hooks :as hooks]
-            [missionary.core :as m]
-            [strucon.lib :refer [defnc]]))
+  (:require
+   ["react-dom" :as rdom]
+   [goog.string :as gstr]
+   [helix.core :refer [$ <>]]
+   [helix.dom :as d]
+   [helix.hooks :as hooks]
+   [missionary.core :as m]
+   [strucon.core :as core]
+   [strucon.lib :refer [defnc]]))
 
 (def track-height 20)
 (def colors ["red", "green", "blue"])
@@ -110,84 +112,12 @@
 (defn unbounded []
   (->Unbounded []))
 
-(defn restartable
-  ([] (restartable nil))
-  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
-   (let [!instances (atom [])]
-     (fn [task]
-       (swap! !instances (fn [instances]
-                           (filterv (fn [^TrackerInstance instance]
-                                      (= (:state @(.-!state instance)) :running))
-                                    instances)))
-       (when (>= (count @!instances) max-concurrency)
-         (when-some [instance (first @!instances)]
-           (instance)))
-       (swap! !instances conj (task (fn []) (fn [])))))))
-
-(defn enqueued
-  ([] (enqueued nil))
-  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
-   (let [!tasks (atom [])]
-     (letfn [(maybe-start []
-               (swap! !tasks (fn [tasks]
-                               (filterv (fn [^TrackerTask task]
-                                          (#{:running :waiting} (:state @(.-!state task))))
-                                        tasks)))
-               (let [running-count (->> @!tasks
-                                        (filter (fn [^TrackerTask task]
-                                                  (= (:state @(.-!state task)) :running)))
-                                        (count))]
-                 (when (< running-count max-concurrency)
-                   (when-some [waiting-task (->> @!tasks
-                                                 (some (fn [^TrackerTask task]
-                                                         (when (= (:state @(.-!state task)) :waiting)
-                                                           task))))]
-                     (waiting-task maybe-start maybe-start)))))]
-       (fn [task]
-         (swap! !tasks conj task)
-         (maybe-start))))))
-
-(defn dropping
-  ([] (dropping nil))
-  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
-   (let [!instances (atom [])]
-     (fn [^TrackerTask task]
-       (let [running-count (->> @!instances
-                                (filter (fn [^TrackerInstance instance]
-                                          (= (:state @(.-!state instance)) :running)))
-                                (count))]
-         (if (< running-count max-concurrency)
-           (swap! !instances conj (task (fn []) (fn [])))
-           (swap! (.-!state task) assoc :state :dropped)))))))
-
-(defn keeping-latest
-  ([] (keeping-latest nil))
-  ([{:keys [max-concurrency] :or {max-concurrency 1}}]
-   (let [!tasks (atom [])]
-     (letfn [(maybe-start []
-               (swap! !tasks (fn [tasks]
-                               (filterv (fn [^TrackerTask task]
-                                          (#{:running :waiting} (:state @(.-!state task))))
-                                        tasks)))
-               (let [running-count (->> @!tasks
-                                        (filter (fn [^TrackerTask task]
-                                                  (= (:state @(.-!state task)) :running)))
-                                        (count))
-                     [waiting-task & additional-tasks] (->> @!tasks
-                                                            (filter (fn [^TrackerTask task]
-                                                                      (= (:state @(.-!state task)) :waiting))))]
-                 (if (< running-count max-concurrency)
-                   (when waiting-task
-                     (waiting-task maybe-start maybe-start))
-                   (when (pos? (count additional-tasks))
-                     (swap! (.-!state waiting-task) assoc :state :dropped)))))]
-       (fn [task]
-         (swap! !tasks conj task)
-         (maybe-start))))))
-
-(defnc Tracker [{:keys [tracker time scale-x]}]
-  (let [{:keys [id !state]} tracker
+(defnc Tracker [{:keys [tracker time scale-x waiting?]}]
+  (let [{:keys [id !state task]} tracker
         {:keys [state perform-time start-time end-time]} (use-atom !state)
+        state (if (and (= :waiting state) (not (waiting? task)))
+                :dropped
+                state)
         color (get colors (mod id (count colors)))
         y (* (mod id 6) track-height)]
     (d/g {:height track-height}
@@ -230,7 +160,8 @@
                        (set-time t)))
                    (let [tracker-task (make-tracker (m/sleep 1500))
                          tracker {:id (count @!trackers)
-                                  :!state (.-!state tracker-task)}]
+                                  :!state (.-!state tracker-task)
+                                  :task tracker-task}]
                      (swap! !trackers conj tracker)
                      (perform tracker-task)))
         clear-timeline! (fn []
@@ -239,7 +170,8 @@
                             (reset! !stop-animation nil))
                           (reset! !start-time nil)
                           (set-time nil)
-                          (reset! !trackers []))]
+                          (reset! !trackers []))
+        waiting? (set (core/waiting perform))]
     (d/div
      (d/div
       (d/button {:on-click perform!}
@@ -252,7 +184,8 @@
               ($ Tracker {:key id
                           :tracker tracker
                           :time time
-                          :scale-x scale-x}))
+                          :scale-x scale-x
+                          :waiting? waiting?}))
             (let [x (if time (scale-x time) 0)]
               (d/line {:x1 x
                        :y1 0
@@ -262,7 +195,7 @@
 
 (defnc TaskFunctionSyntax []
   (let [[status set-status] (hooks/use-state nil)
-        [scheduler] (hooks/use-state unbounded)
+        [scheduler] (hooks/use-state core/unbounded)
         task (fn []
                (make-tracker
                 (m/sp
@@ -279,7 +212,7 @@
 (defnc CancelationDemo []
   (let [[counter set-counter] (hooks/use-state 0)
         [most-recent set-most-recent] (hooks/use-state nil)
-        most-recent-state (:state (use-atom (or (some-> most-recent .-!state)
+        most-recent-state (:state (use-atom (or (some-> ^TrackerTask most-recent .-!state)
                                                 (atom nil))))
         [scheduler] (hooks/use-state unbounded)
         task (fn []
@@ -304,7 +237,7 @@
   (let [[num-completions set-num-completions] (hooks/use-state 0)
         [num-errors set-num-errors] (hooks/use-state 0)
         [num-finallys set-num-finallys] (hooks/use-state 0)
-        [scheduler] (hooks/use-state restartable)
+        [scheduler] (hooks/use-state core/restartable)
         task (fn [error?]
                (make-tracker
                 (m/sp
@@ -336,7 +269,7 @@
 
 (defnc ChildTasks []
   (let [[status set-status] (hooks/use-state "Waiting to start")
-        [scheduler] (hooks/use-state restartable)
+        [scheduler] (hooks/use-state core/restartable)
         grandchild-task (m/sp
                          (set-status "3. Grandchild: one moment...")
                          (m/? (m/sleep 1000))
@@ -357,11 +290,11 @@
                      (set-status "6. Done!"))]
     (d/div
      (d/div status)
+     ;; TODO task states
      (d/ul
-       ;; TODO task states
-       (d/li "Parent Task: ")
-       (d/li "Child Task: ")
-       (d/li "Grandchild Task: "))
+      (d/li "Parent Task: ")
+      (d/li "Child Task: ")
+      (d/li "Grandchild Task: "))
      (d/button {:on-click #(scheduler (make-tracker parent-task))}
                "Perform Parent Task"))))
 
@@ -372,13 +305,12 @@
 
 (defnc EncapsulatedTasks []
   (d/div
-    (d/button {}
-              "Start Upload")
-    (d/div "Queued Uploads: ")
-    (d/div "Uploading to ")
-    (d/div {:style {:color "green" :font-weight "bold"}}
-           "Uploading to ")))
-
+   (d/button {}
+             "Start Upload")
+   (d/div "Queued Uploads: ")
+   (d/div "Uploading to ")
+   (d/div {:style {:color "green" :font-weight "bold"}}
+          "Uploading to ")))
 
 (defnc App []
   (d/div
@@ -395,31 +327,31 @@
    ($ EncapsulatedTasks)
    (d/h2 "unbounded: Tasks run concurrently")
    (d/div
-    ($ Graph {:perform (unbounded)}))
+    ($ Graph {:perform (core/unbounded)}))
    (d/h2 "restartable")
    (d/div
-    ($ Graph {:perform (restartable)}))
+    ($ Graph {:perform (core/restartable)}))
    (d/h2 "enqueue")
    (d/div
-    ($ Graph {:perform (enqueued)}))
+    ($ Graph {:perform (core/enqueued)}))
    (d/h2 "drop")
    (d/div
-    ($ Graph {:perform (dropping)}))
+    ($ Graph {:perform (core/dropping)}))
    (d/h2 "keepLatest")
    (d/div
-    ($ Graph {:perform (keeping-latest)}))
+    ($ Graph {:perform (core/keeping-latest)}))
    (d/h2 "restartable with max-concurrency: 3")
    (d/div
-    ($ Graph {:perform (restartable {:max-concurrency 3})}))
+    ($ Graph {:perform (core/restartable {:max-concurrency 3})}))
    (d/h2 "enqueue with max-concurrency: 3")
    (d/div
-    ($ Graph {:perform (enqueued {:max-concurrency 3})}))
+    ($ Graph {:perform (core/enqueued {:max-concurrency 3})}))
    (d/h2 "drop with max-concurrency: 3")
    (d/div
-    ($ Graph {:perform (dropping {:max-concurrency 3})}))
+    ($ Graph {:perform (core/dropping {:max-concurrency 3})}))
    (d/h2 "keepLatest with max-concurrency: 3")
    (d/div
-    ($ Graph {:perform (keeping-latest {:max-concurrency 3})}))))
+    ($ Graph {:perform (core/keeping-latest {:max-concurrency 3})}))))
 
 (defn ^:export main
   []

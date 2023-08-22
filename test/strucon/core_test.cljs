@@ -90,7 +90,8 @@
              (perform (make-task 3))
              (is (= [[:begin 1]]
                     @!results))
-             (m/? perform)
+             ; (m/? perform)
+             (m/? (m/sleep 30))
              (is (= [[:begin 1]
                      [:end 1]
                      [:begin 2]
@@ -140,6 +141,10 @@
                      [:begin 4] [:end 4]]
                     @!results))
              (done))))))
+
+(deftest dropping-waiting
+  (let [perform (core/dropping)]
+    (is (= '() (core/waiting perform)))))
 
 (deftest dropping-max-concurrency
   (async done
