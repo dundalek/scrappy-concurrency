@@ -76,12 +76,9 @@
                        (if (-> e ex-data :cancelled)
                          (swap! !state
                                 (fn [state]
-                                  (if (= (:state state) :waiting)
-                                    (assoc state
-                                           :state :dropped)
-                                    (assoc state
-                                           :state :canceled
-                                           :end-time (js/Date.now)))))
+                                  (assoc state
+                                         :state :canceled
+                                         :end-time (js/Date.now))))
                          (swap! !state assoc
                                 :state :error
                                 :end-time (js/Date.now)))
@@ -109,29 +106,28 @@
     "running"
     "idle"))
 
-(defnc Tracker [{:keys [tracker time scale-x waiting?]}]
-  (let [{:keys [id !state task]} tracker
-        {:keys [state perform-time start-time end-time]} (use-atom !state)
-        state (if (and (= :waiting state) (not (waiting? task)))
+(defnc Tracker [{:keys [id ^TrackerTask tracker time scale-x waiting?]}]
+  (let [{:keys [state perform-time start-time end-time]} (use-atom (.-!state tracker))
+        state (if (and (= :waiting state) (not (waiting? tracker)))
                 :dropped
                 state)
         color (get colors (mod id (count colors)))
         y (* (mod id 6) track-height)]
     (d/g {:height track-height}
-         (when-let [x (some-> start-time (scale-x))]
-           (let [width (Math/max 0
-                                 (- (scale-x (or end-time time))
-                                    x))]
-             (d/rect {:x x
+         (when start-time
+           (let [x (scale-x start-time)
+                 width (max 0 (- (scale-x (or end-time time))
+                                 x))]
+             (d/rect {:x (str x "%")
                       :y y
                       :height track-height
-                      :width width
+                      :width (str width "%")
                       :stroke "black"
                       :fill color
                       :fill-opacity "0.3"})))
          (let [x (scale-x perform-time)]
            (<>
-            (d/text {:x (+ x 5)
+            (d/text {:x (str (+ x 0.5) "%")
                      :y (+ y 15)
                      :font-family "sans-serif"
                      :fill color
@@ -139,21 +135,22 @@
                      :text-decoration (if (#{:canceled :dropped} state) "line-through" "none")
                      :font-style (if start-time "normal" "italic")}
                     (gstr/capitalize (name state)))
-            (d/line {:x1 x :y1 y :x2 x :y2 (+ y 20) :stroke color}))))))
+            (d/line {:x1 (str x "%") :x2 (str x "%") :y1 y :y2 (+ y 20) :stroke color}))))))
 
 (defnc Graph [{:keys [perform]}]
   (let [{:keys [start-time time start stop]} (use-animation)
         [!trackers] (hooks/use-state #(atom []))
         trackers (use-atom !trackers)
-        scale-x (fn [x] (/ (- x start-time) 20))
+        time-elapsed (max (- time start-time) 10000)
+        scale-x (fn [x]
+                  (* (/ (- x start-time)
+                        time-elapsed)
+                     100))
         perform! (fn []
-                   (start)
-                   (let [tracker-task (make-tracker (m/sleep 1500))
-                         tracker {:id (count @!trackers)
-                                  :!state (.-!state tracker-task)
-                                  :task tracker-task}]
-                     (swap! !trackers conj tracker)
-                     (perform tracker-task)))
+                   (let [tracker-task (make-tracker (m/sleep 1500))]
+                     (start)
+                     (perform tracker-task)
+                     (swap! !trackers conj tracker-task)))
         clear-timeline! (fn []
                           (stop)
                           (reset! !trackers []))
@@ -166,16 +163,17 @@
                 "Clear Timeline"))
         ; (d/button "Cancel all"))
      (d/svg {:style {:width "100%"}}
-            (for [{:keys [id] :as tracker} trackers]
+            (for [[id tracker] (map-indexed list trackers)]
               ($ Tracker {:key id
+                          :id id
                           :tracker tracker
                           :time time
                           :scale-x scale-x
                           :waiting? waiting?}))
-            (let [x (if time (scale-x time) 0)]
-              (d/line {:x1 x
+            (let [x (scale-x time)]
+              (d/line {:x1 (str x "%")
+                       :x2 (str x "%")
                        :y1 0
-                       :x2 x
                        :y2 "100%"
                        :stroke "black"}))))))
 
