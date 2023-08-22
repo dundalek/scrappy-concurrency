@@ -52,6 +52,17 @@
                               #(remove-watch sub-atom k)))})]
     (hooks/use-subscription sub)))
 
+(defn- instance-state-map [state]
+  {:state state
+   :started? (not= state :waiting) ; rename to idle?
+   :canceled? (= state :canceled)
+   :error? (= state :error)
+   :finished? (or (= state :canceled)
+                  (= state :finished)
+                  (= state :error)
+                  (= state :dropped))
+   :successful? (= state :finished)}) ; proably rename :finished to success
+
 (deftype TaskInstance [task !state]
   IFn
   (-invoke [_ failure success]
@@ -66,17 +77,10 @@
   (-add-watch [_ key f]
     (-add-watch !state key f))
   (-remove-watch [_ key]
-    (-remove-watch !state key)))
+    (-remove-watch !state key))
 
-(defn- instance-state-map [state]
-  {:state state
-   :started? (not= state :waiting) ; rename to idle?
-   :canceled? (= state :canceled)
-   :error? (= state :error)
-   :finished? (or (= state :canceled)
-                  (= state :finished)
-                  (= state :error))
-   :successful? (= state :finished)}) ; proably rename :finished to success
+  core/Droppable
+  (drop! [_] (swap! !state merge (instance-state-map :dropped))))
 
 (defn state-tracked-task [task !state]
   (swap! !state merge
@@ -143,11 +147,8 @@
     "running"
     "idle"))
 
-(defnc Tracker [{:keys [id tracker time scale-x waiting?]}]
+(defnc Tracker [{:keys [id tracker time scale-x]}]
   (let [{:keys [state perform-time start-time end-time]} (use-atom tracker)
-        state (if (and (= :waiting state) (not (waiting? tracker)))
-                :dropped
-                state)
         color (get colors (mod id (count colors)))
         y (* (mod id 6) track-height)]
     (d/g {:height track-height}
@@ -196,8 +197,8 @@
                           (perform-with-tracker (m/sleep 1500))))
         clear-timeline! (fn []
                           (stop)
-                          (reset! !trackers []))
-        waiting? (set (core/waiting perform))]
+                          (core/cancel perform)
+                          (reset! !trackers []))]
     (d/div
      (d/div
       (d/button {:on-click perform!}
@@ -213,8 +214,7 @@
                           :id id
                           :tracker tracker
                           :time time
-                          :scale-x scale-x
-                          :waiting? waiting?}))
+                          :scale-x scale-x}))
             (let [x (scale-x time)]
               (d/line {:x1 (str x "%")
                        :x2 (str x "%")

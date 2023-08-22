@@ -6,6 +6,9 @@
 (defprotocol Cancellable
   (cancel [_]))
 
+(defprotocol Droppable
+  (drop! [_]))
+
 (declare unbounded-start)
 
 (deftype Unbounded [^:mutable instances
@@ -135,13 +138,17 @@
      (reify
        IFn
        (-invoke [_ task]
-         (when (< (count @!current) max-concurrency)
+         (cond
+           (< (count @!current) max-concurrency)
            (start-task! !current task
                         (fn []
                           (when (empty? @!current)
                             (when (ifn? @!s)
                               (@!s))))
-                        (fn []))))
+                        (fn []))
+
+           (satisfies? Droppable task)
+           (drop! task)))
        (-invoke [_ s f]
          (reset! !s s))
 
@@ -174,6 +181,9 @@
      (reify
        IFn
        (-invoke [_ task]
+         (when-some [waiting-task @!waiting]
+           (when (satisfies? Droppable waiting-task)
+             (drop! waiting-task)))
          (reset! !waiting task)
          (keeping-latest-maybe-start max-concurrency !current !waiting !s))
        (-invoke [_ s f]
