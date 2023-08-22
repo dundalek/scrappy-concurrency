@@ -301,53 +301,44 @@
 (defn make-random-url []
   (str "https://www." (rand-nth words) ".edu"))
 
-(defnc EncapsulatedTasks []
-  (d/div
-   (d/button {}
-             "Start Upload")
-   (d/div "Queued Uploads: ")
-   (d/div "Uploading to ")
-   (d/div {:style {:color "green" :font-weight "bold"}}
-          "Uploading to ")))
-
 (defnc App []
   (d/div
    (d/h1 "Welcome!")
-   (d/h2 "Task Function Syntax")
+   (d/h2 "Defining Tasks")
    ($ TaskFunctionSyntax)
    (d/h2 "Cancelation")
    ($ CancelationDemo)
-   (d/h2 "Errors vs Cancelation")
+   (d/h2 "Handling Errors")
    ($ ErrorsVsCancelation)
    (d/h2 "Child Tasks")
    ($ ChildTasks)
-   (d/h2 "Encapsulated Tasks")
-   ($ EncapsulatedTasks)
-   (d/h2 "unbounded: Tasks run concurrently")
+   (d/h2 "Task Modifiers")
+   (d/h3 "unbounded: Tasks run concurrently")
    (d/div
     ($ Graph {:perform (core/unbounded)}))
-   (d/h2 "restartable")
+   (d/h3 "restartable")
    (d/div
     ($ Graph {:perform (core/restartable)}))
-   (d/h2 "enqueue")
+   (d/h3 "enqueue")
    (d/div
     ($ Graph {:perform (core/enqueued)}))
-   (d/h2 "drop")
+   (d/h3 "drop")
    (d/div
     ($ Graph {:perform (core/dropping)}))
-   (d/h2 "keepLatest")
+   (d/h3 "keepLatest")
    (d/div
     ($ Graph {:perform (core/keeping-latest)}))
-   (d/h2 "restartable with max-concurrency: 3")
+   (d/h2 "Using max-concurrency")
+   (d/h3 "restartable with max-concurrency: 3")
    (d/div
     ($ Graph {:perform (core/restartable {:max-concurrency 3})}))
-   (d/h2 "enqueue with max-concurrency: 3")
+   (d/h3 "enqueue with max-concurrency: 3")
    (d/div
     ($ Graph {:perform (core/enqueued {:max-concurrency 3})}))
-   (d/h2 "drop with max-concurrency: 3")
+   (d/h3 "drop with max-concurrency: 3")
    (d/div
     ($ Graph {:perform (core/dropping {:max-concurrency 3})}))
-   (d/h2 "keepLatest with max-concurrency: 3")
+   (d/h3 "keepLatest with max-concurrency: 3")
    (d/div
     ($ Graph {:perform (core/keeping-latest {:max-concurrency 3})}))))
 
