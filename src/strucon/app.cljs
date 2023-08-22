@@ -121,6 +121,11 @@
 (defn use-task-tracker-state [^TrackerTask tracker]
   (:state (use-atom (some-> tracker .-!state))))
 
+(defn format-task-status [status]
+  (if (= status :running)
+    "running"
+    "idle"))
+
 (defnc Tracker [{:keys [tracker time scale-x waiting?]}]
   (let [{:keys [id !state task]} tracker
         {:keys [state perform-time start-time end-time]} (use-atom !state)
@@ -246,32 +251,33 @@
   (let [[num-completions set-num-completions] (hooks/use-state 0)
         [num-errors set-num-errors] (hooks/use-state 0)
         [num-finallys set-num-finallys] (hooks/use-state 0)
-        [scheduler] (hooks/use-state core/restartable)
+        [perform] (hooks/use-state #(core/restartable))
+        [!tracker-state] (hooks/use-state #(atom nil))
+        perform (fn [task]
+                  (perform (->TrackerTask task !tracker-state)))
         task (fn [error?]
-               (make-tracker
-                (m/sp
-                 (try
-                   (m/? (m/sleep 1000))
-                    ;; Difference to ember-concurrency, because it uses generators the completion counter can be outside of the try-catch
-                   (set-num-completions + 1)
-                   (when error?
-                     (throw (js/Error. "Boom")))
-                   (catch :default e
-                      ;; This is difference to ember-concurrency, which does not consider cancellation an error
-                      ;; Maybe reconsider later
-                     (when-not (-> e ex-data :cancelled)
-                       (set-num-errors + 1)))
-                   (finally
-                     (set-num-finallys + 1))))))]
-
+               (m/sp
+                (try
+                  (m/? (m/sleep 1000))
+                  ;; Difference to ember-concurrency, because it uses generators the completion counter can be outside of the try-catch
+                  (set-num-completions inc)
+                  (when error?
+                    (throw (js/Error. "Boom")))
+                  (catch :default e
+                    ;; This is difference to ember-concurrency, which does not consider cancellation an error
+                    ;; Maybe reconsider later
+                    (when-not (-> e ex-data :cancelled)
+                      (set-num-errors inc)))
+                  (finally
+                    (set-num-finallys inc)))))
+        {:keys [state]} (use-atom !tracker-state)]
     (d/div
-     (d/button {:on-click #(scheduler (task false))}
+     (d/button {:on-click #(perform (task false))}
                "Run to Completion")
-     (d/button {:on-click #(scheduler (task true))}
+     (d/button {:on-click #(perform (task true))}
                "Throw an Error")
      (d/ul
-        ;; TODO: task (scheduler) state
-      (d/li "Task state: ")
+      (d/li "Task state: " (format-task-status state))
       (d/li "Completions: " num-completions)
       (d/li "Errors: " num-errors)
       (d/li "Finally block runs: " num-finallys)))))
@@ -302,17 +308,13 @@
                       (set-status "6. Done!")))
         parent-task-state (use-task-tracker-state parent-task)
         child-task-state (use-task-tracker-state child-task)
-        grandchild-task-state (use-task-tracker-state grandchild-task)
-        format-status (fn [status]
-                        (if (= status :running)
-                          "running"
-                          "idle"))]
+        grandchild-task-state (use-task-tracker-state grandchild-task)]
     (d/div
      (d/div status)
      (d/ul
-      (d/li "Parent Task: " (format-status parent-task-state))
-      (d/li "Child Task: " (format-status child-task-state))
-      (d/li "Grandchild Task: " (format-status grandchild-task-state)))
+      (d/li "Parent Task: " (format-task-status parent-task-state))
+      (d/li "Child Task: " (format-task-status child-task-state))
+      (d/li "Grandchild Task: " (format-task-status grandchild-task-state)))
      (d/button {:on-click #(perform parent-task)}
                (if (= parent-task-state :running)
                  "Restart Parent Task"
