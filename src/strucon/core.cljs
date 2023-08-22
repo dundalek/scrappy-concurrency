@@ -1,8 +1,5 @@
 (ns strucon.core)
 
-(defprotocol Waiting
-  (waiting [_]))
-
 (defprotocol Cancellable
   (cancel [_]))
 
@@ -18,9 +15,6 @@
     (unbounded-start this task))
   (-invoke [this s f]
     (set! (.-success this) s))
-
-  Waiting
-  (waiting [_] [])
 
   Cancellable
   (cancel [_]
@@ -92,9 +86,6 @@
        (-invoke [_ s f]
          (reset! !s s))
 
-       Waiting
-       (waiting [_] [])
-
        Cancellable
        (cancel [_] (cancel-current! !current))))))
 
@@ -119,9 +110,6 @@
          (swap! !queue conj task)
          (enqueued-maybe-start max-concurrency !current !queue)
          nil)
-
-       Waiting
-       (waiting [_] (seq @!queue))
 
        Cancellable
        (cancel [_]
@@ -151,9 +139,6 @@
            (drop! task)))
        (-invoke [_ s f]
          (reset! !s s))
-
-       Waiting
-       (waiting [_] [])
 
        Cancellable
        (cancel [_] (cancel-current! !current))))))
@@ -188,12 +173,6 @@
          (keeping-latest-maybe-start max-concurrency !current !waiting !s))
        (-invoke [_ s f]
          (reset! !s s))
-
-       Waiting
-       (waiting [_]
-         (if @!waiting
-           [@!waiting]
-           []))
 
        Cancellable
        (cancel [_]

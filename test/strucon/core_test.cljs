@@ -142,10 +142,6 @@
                     @!results))
              (done))))))
 
-(deftest dropping-waiting
-  (let [perform (core/dropping)]
-    (is (= '() (core/waiting perform)))))
-
 (deftest dropping-max-concurrency
   (async done
          (let [{:keys [make-task !results]} (task-helper)
