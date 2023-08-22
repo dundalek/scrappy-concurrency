@@ -52,12 +52,10 @@
                               #(remove-watch sub-atom k)))})]
     (hooks/use-subscription sub)))
 
-(declare tracker-start)
 (deftype TaskInstance [task !state]
   IFn
   (-invoke [_ failure success]
-    (assert (= (:state @!state) :waiting) "Tracked task should be started only once.")
-    (tracker-start !state task failure success))
+    (task failure success))
 
   IDeref
   (-deref [_] @!state)
@@ -80,36 +78,55 @@
                   (= state :error))
    :successful? (= state :finished)}) ; proably rename :finished to success
 
-(defn tracker-start [!state task success failure]
+(defn state-tracked-task [task !state]
   (swap! !state merge
-         (instance-state-map :running)
-         {:start-time (js/Date.now)})
-  (let [cancel (task (fn [x]
-                       (swap! !state merge
-                              (instance-state-map :finished)
-                              {:value x
-                               :end-time (js/Date.now)})
-                       (success x))
-                     (fn [e]
-                       (if (-> e ex-data :cancelled)
+         (instance-state-map :waiting)
+         {:value nil
+          :error nil})
+  (fn [success failure]
+    (swap! !state merge (instance-state-map :running))
+    (let [cancel (task (fn [x]
                          (swap! !state merge
-                                (instance-state-map :canceled)
-                                {:end-time (js/Date.now)})
-                         (swap! !state merge
-                                (instance-state-map :error)
-                                {:error e
-                                 :end-time (js/Date.now)}))
-                       (failure e)))]
-    cancel))
+                                (instance-state-map :finished)
+                                {:value x})
+                         (success x))
+                       (fn [e]
+                         (if (-> e ex-data :cancelled)
+                           (swap! !state merge
+                                  (instance-state-map :canceled))
+                           (swap! !state merge
+                                  (instance-state-map :error)
+                                  {:error e}))
+                         (failure e)))]
+      cancel)))
+
+(defn time-tracked-task [task !state]
+  (swap! !state assoc
+         :perform-time (js/Date.now)
+         :start-time nil
+         :end-time nil)
+  (fn [success failure]
+    (swap! !state assoc :start-time (js/Date.now))
+    (task (fn [x]
+            (swap! !state assoc :end-time (js/Date.now))
+            (success x))
+          (fn [e]
+            (swap! !state assoc :end-time (js/Date.now))
+            (failure e)))))
+
+(defn tracked-task [task !state]
+  (-> task
+      (state-tracked-task !state)
+      (time-tracked-task !state)))
 
 (defn make-tracker [task]
-  (let [!state (atom (assoc (instance-state-map :waiting)
-                            :perform-time (js/Date.now)
-                            :start-time nil
-                            :end-time nil
-                            :value nil
-                            :error nil))]
-    (->TaskInstance task !state)))
+  (let [!state (atom {})
+        wrapped-task (tracked-task task !state)
+        wrapped-task (fn [s f]
+                       (assert (= (:state @!state) :waiting)
+                               "Tracked task should be started only once. Create new tracker instance for each perform")
+                       (wrapped-task s f))]
+    (->TaskInstance wrapped-task !state)))
 
 (defn format-task-status [status]
   (if (= status :running)
