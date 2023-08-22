@@ -3,7 +3,8 @@ js/
 /package-lock.json
 .shadow-cljs/
 /.cpcache
-/.clj-kondo/.cache/
+/.clj-kondo/
+!/.clj-kondo/config.edn
 /.lsp
 /build
 .nrepl-port

@@ -112,6 +112,15 @@
 (defn unbounded []
   (->Unbounded []))
 
+(defn use-task-tracker [task]
+  (first (hooks/use-state
+          (fn []
+            (make-tracker
+             task)))))
+
+(defn use-task-tracker-state [^TrackerTask tracker]
+  (:state (use-atom (some-> tracker .-!state))))
+
 (defnc Tracker [{:keys [tracker time scale-x waiting?]}]
   (let [{:keys [id !state task]} tracker
         {:keys [state perform-time start-time end-time]} (use-atom !state)
@@ -269,34 +278,45 @@
 
 (defnc ChildTasks []
   (let [[status set-status] (hooks/use-state "Waiting to start")
-        [scheduler] (hooks/use-state core/restartable)
-        grandchild-task (m/sp
-                         (set-status "3. Grandchild: one moment...")
-                         (m/? (m/sleep 1000))
-                         "Hello")
-        child-task (m/sp
-                    (set-status "2. Child: one moment...")
-                    (m/? (m/sleep 1000))
-                    (let [value (m/? grandchild-task)]
-                      (set-status (str "4. Child: grandchild says \"" value "\"")))
-                    (m/? (m/sleep 1000))
-                    "What's up")
-        parent-task (m/sp
-                     (set-status "1. Parent: one moment...")
+        [perform] (hooks/use-state #(core/restartable))
+        grandchild-task (use-task-tracker
+                         (m/sp
+                          (set-status "3. Grandchild: one moment...")
+                          (m/? (m/sleep 1000))
+                          "Hello"))
+        child-task (use-task-tracker
+                    (m/sp
+                     (set-status "2. Child: one moment...")
                      (m/? (m/sleep 1000))
-                     (let [value (m/? child-task)]
-                       (set-status (str "5. Parent: child says \"" value "\"")))
+                     (let [value (m/? grandchild-task)]
+                       (set-status (str "4. Child: grandchild says \"" value "\"")))
                      (m/? (m/sleep 1000))
-                     (set-status "6. Done!"))]
+                     "What's up"))
+        parent-task (use-task-tracker
+                     (m/sp
+                      (set-status "1. Parent: one moment...")
+                      (m/? (m/sleep 1000))
+                      (let [value (m/? child-task)]
+                        (set-status (str "5. Parent: child says \"" value "\"")))
+                      (m/? (m/sleep 1000))
+                      (set-status "6. Done!")))
+        parent-task-state (use-task-tracker-state parent-task)
+        child-task-state (use-task-tracker-state child-task)
+        grandchild-task-state (use-task-tracker-state grandchild-task)
+        format-status (fn [status]
+                        (if (= status :running)
+                          "running"
+                          "idle"))]
     (d/div
      (d/div status)
-     ;; TODO task states
      (d/ul
-      (d/li "Parent Task: ")
-      (d/li "Child Task: ")
-      (d/li "Grandchild Task: "))
-     (d/button {:on-click #(scheduler (make-tracker parent-task))}
-               "Perform Parent Task"))))
+      (d/li "Parent Task: " (format-status parent-task-state))
+      (d/li "Child Task: " (format-status child-task-state))
+      (d/li "Grandchild Task: " (format-status grandchild-task-state)))
+     (d/button {:on-click #(perform parent-task)}
+               (if (= parent-task-state :running)
+                 "Restart Parent Task"
+                 "Perform Parent Task")))))
 
 (def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
 
