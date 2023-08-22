@@ -59,28 +59,27 @@
 (declare tracker-start)
 (deftype TrackerTask [task !state]
   IFn
-  (-invoke [this failure success] (tracker-start this failure success)))
+  (-invoke [this failure success]
+    (tracker-start !state task failure success)))
 
-(defn tracker-start [^Tracker this success failure]
-  (let [!state (.-!state this)
-        task (.-task this)
-        _ (swap! !state assoc
-                 :state :running
-                 :start-time (js/Date.now))
-        cancel (task (fn [x]
+(defn tracker-start [!state task success failure]
+  (swap! !state assoc
+         :state :running
+         :start-time (js/Date.now))
+  (let [cancel (task (fn [x]
                        (swap! !state assoc
                               :state :finished
+                              :value x
                               :end-time (js/Date.now))
                        (success x))
                      (fn [e]
                        (if (-> e ex-data :cancelled)
-                         (swap! !state
-                                (fn [state]
-                                  (assoc state
-                                         :state :canceled
-                                         :end-time (js/Date.now))))
+                         (swap! !state assoc
+                                :state :canceled
+                                :end-time (js/Date.now))
                          (swap! !state assoc
                                 :state :error
+                                :error e
                                 :end-time (js/Date.now)))
                        (failure e)))]
     (->TrackerInstance cancel !state)))
@@ -89,7 +88,9 @@
   (let [!state (atom {:state :waiting
                       :perform-time (js/Date.now)
                       :start-time nil
-                      :end-time nil})]
+                      :end-time nil
+                      :value nil
+                      :error nil})]
     (->TrackerTask task !state)))
 
 (defn use-task-tracker [task]
@@ -140,6 +141,10 @@
 (defnc Graph [{:keys [perform]}]
   (let [{:keys [start-time time start stop]} (use-animation)
         [!trackers] (hooks/use-state #(atom []))
+        perform-with-tracker (fn [task]
+                               (let [tracker-task (make-tracker task)]
+                                 (perform tracker-task)
+                                 tracker-task))
         trackers (use-atom !trackers)
         time-elapsed (max (- time start-time) 10000)
         scale-x (fn [x]
@@ -147,10 +152,9 @@
                         time-elapsed)
                      100))
         perform! (fn []
-                   (let [tracker-task (make-tracker (m/sleep 1500))]
-                     (start)
-                     (perform tracker-task)
-                     (swap! !trackers conj tracker-task)))
+                   (start)
+                   (swap! !trackers conj
+                          (perform-with-tracker (m/sleep 1500))))
         clear-timeline! (fn []
                           (stop)
                           (reset! !trackers []))
@@ -177,19 +181,17 @@
                        :y2 "100%"
                        :stroke "black"}))))))
 
-(defnc TaskFunctionSyntax []
+(defnc DefiningTasks []
   (let [[status set-status] (hooks/use-state nil)
-        [scheduler] (hooks/use-state core/unbounded)
-        task (fn []
-               (make-tracker
-                (m/sp
-                 (set-status "Gimme one second...")
-                 (m/? (m/sleep 1000))
-                 (set-status "Gimme one more second...")
-                 (m/? (m/sleep 1000))
-                 (set-status "OK, I'm done."))))]
+        [perform] (hooks/use-state #(core/unbounded))
+        task (m/sp
+              (set-status "Gimme one second...")
+              (m/? (m/sleep 1000))
+              (set-status "Gimme one more second...")
+              (m/? (m/sleep 1000))
+              (set-status "OK, I'm done."))]
     (d/div
-     (d/button {:on-click #(scheduler (task))}
+     (d/button {:on-click #(perform task)}
                "Wait A Few Seconds")
      (d/span status))))
 
@@ -303,7 +305,7 @@
   (d/div
    (d/h1 "Welcome!")
    (d/h2 "Defining Tasks")
-   ($ TaskFunctionSyntax)
+   ($ DefiningTasks)
    (d/h2 "Cancelation")
    ($ CancelationDemo)
    (d/h2 "Handling Errors")

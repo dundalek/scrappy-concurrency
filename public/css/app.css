@@ -1,8 +1,4 @@
-/*
-
-app-template.css overrides
-
-remove this comment if used
-remove this file if not
-
-*/
+g:hover {
+  stroke-width: 3px;
+  font-weight: 700;
+}
