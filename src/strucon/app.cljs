@@ -128,6 +128,16 @@
                        (wrapped-task s f))]
     (->TaskInstance wrapped-task !state)))
 
+(defn make-running-tracker [task update-running-count!]
+  (fn [s f]
+    (update-running-count! inc)
+    (task (fn [x]
+            (update-running-count! dec)
+            (s x))
+          (fn [e]
+            (update-running-count! dec)
+            (f e)))))
+
 (defn format-task-status [status]
   (if (= status :running)
     "running"
@@ -167,8 +177,11 @@
 (defnc Graph [{:keys [perform]}]
   (let [{:keys [start-time time start stop]} (use-animation)
         [!trackers] (hooks/use-state #(atom []))
+        [running-count set-running-count!] (hooks/use-state 0)
         perform-with-tracker (fn [task]
-                               (let [tracker-task (make-tracker task)]
+                               (let [tracker-task (-> task
+                                                      (make-running-tracker set-running-count!)
+                                                      (make-tracker))]
                                  (perform tracker-task)
                                  tracker-task))
         trackers (use-atom !trackers)
@@ -190,8 +203,10 @@
       (d/button {:on-click perform!}
                 "Perform")
       (d/button {:on-click clear-timeline!}
-                "Clear Timeline"))
-        ; (d/button "Cancel all"))
+                "Clear Timeline")
+      (when (pos? running-count)
+        (d/button {:on-click #(core/cancel perform)}
+                  "Cancel all")))
      (d/svg {:style {:width "100%"}}
             (for [[id tracker] (map-indexed list trackers)]
               ($ Tracker {:key id

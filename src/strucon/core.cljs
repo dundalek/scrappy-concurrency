@@ -20,10 +20,10 @@
   (waiting [_] [])
 
   Cancellable
-  (cancel [this]
-    (doseq [cancel (.-instances this)]
+  (cancel [_]
+    (doseq [cancel instances]
       (cancel))
-    (set! (.-instances this) #{})))
+    (set! instances #{})))
 
 (defn unbounded-start [^Unbounded this task]
   (let [!instance (atom nil)
@@ -61,6 +61,11 @@
     (swap! !current conj instance)
     nil))
 
+(defn- cancel-current! [!current]
+  (doseq [cancel @!current]
+    (cancel))
+  (reset! !current []))
+
 (defn restartable
   ([] (restartable {}))
   ([{:keys [max-concurrency]}]
@@ -83,8 +88,12 @@
                       (fn [])))
        (-invoke [_ s f]
          (reset! !s s))
+
        Waiting
-       (waiting [_] [])))))
+       (waiting [_] [])
+
+       Cancellable
+       (cancel [_] (cancel-current! !current))))))
 
 (defn enqueued-maybe-start [max-concurrency !current !queue]
   (when (< (count @!current) max-concurrency)
@@ -107,8 +116,14 @@
          (swap! !queue conj task)
          (enqueued-maybe-start max-concurrency !current !queue)
          nil)
+
        Waiting
-       (waiting [_] (seq @!queue))))))
+       (waiting [_] (seq @!queue))
+
+       Cancellable
+       (cancel [_]
+         (reset! !queue #queue [])
+         (cancel-current! !current))))))
 
 (defn dropping
   ([] (dropping {}))
@@ -129,8 +144,12 @@
                         (fn []))))
        (-invoke [_ s f]
          (reset! !s s))
+
        Waiting
-       (waiting [_] [])))))
+       (waiting [_] [])
+
+       Cancellable
+       (cancel [_] (cancel-current! !current))))))
 
 (defn- keeping-latest-maybe-start [max-concurrency !current !waiting !s]
   (when (< (count @!current) max-concurrency)
@@ -159,8 +178,15 @@
          (keeping-latest-maybe-start max-concurrency !current !waiting !s))
        (-invoke [_ s f]
          (reset! !s s))
+
        Waiting
        (waiting [_]
          (if @!waiting
            [@!waiting]
-           []))))))
+           []))
+
+       Cancellable
+       (cancel [_]
+         (reset! !waiting nil)
+         (cancel-current! !current))))))
+
