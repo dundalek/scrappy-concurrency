@@ -3,6 +3,9 @@
 (defprotocol Waiting
   (waiting [_]))
 
+(defprotocol Cancellable
+  (cancel [_]))
+
 (declare unbounded-start)
 
 (deftype Unbounded [^:mutable instances
@@ -12,8 +15,15 @@
     (unbounded-start this task))
   (-invoke [this s f]
     (set! (.-success this) s))
+
   Waiting
-  (waiting [_] []))
+  (waiting [_] [])
+
+  Cancellable
+  (cancel [this]
+    (doseq [cancel (.-instances this)]
+      (cancel))
+    (set! (.-instances this) #{})))
 
 (defn unbounded-start [^Unbounded this task]
   (let [!instance (atom nil)

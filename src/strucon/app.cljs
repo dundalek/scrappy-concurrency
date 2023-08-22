@@ -84,34 +84,6 @@
                       :end-time nil})]
     (->TrackerTask task !state)))
 
-(defprotocol Scheduler
-  (cancel-all [this]))
-
-(declare unbounded-start)
-(declare unbounded-cancel-all)
-(deftype Unbounded [instances]
-  IFn
-  (-invoke [this task] (unbounded-start this task))
-
-  Scheduler
-  (cancel-all [this] (unbounded-cancel-all this)))
-
-(defn unbounded-start [^Unbounded this task]
-  (let [instance (task (fn []) (fn []))]
-    (set! (.-instances this)
-          (-> (filterv (fn [^TrackerInstance instance]
-                         (= (:state @(.-!state instance)) :running))
-                       (.-instances this))
-              (conj instance)))
-    instance))
-
-(defn unbounded-cancel-all [^Unbounded this]
-  (doseq [instance (.-instances this)]
-    (instance)))
-
-(defn unbounded []
-  (->Unbounded []))
-
 (defn use-task-tracker [task]
   (first (hooks/use-state
           (fn []
@@ -225,26 +197,30 @@
 
 (defnc CancelationDemo []
   (let [[counter set-counter] (hooks/use-state 0)
-        [most-recent set-most-recent] (hooks/use-state nil)
-        most-recent-state (:state (use-atom (or (some-> ^TrackerTask most-recent .-!state)
-                                                (atom nil))))
-        [scheduler] (hooks/use-state unbounded)
-        task (fn []
-               (make-tracker
-                (m/sp
-                 (try
-                   (set-counter + 1)
-                   (m/? m/never)
-                   (finally
-                     (set-counter - 1))))))]
+        [cancel-most-recent set-cancel-most-recent] (hooks/use-state nil)
+        [perform] (hooks/use-state #(core/unbounded))
+        [!tracker-state] (hooks/use-state #(atom nil))
+        perform! (fn [task]
+                   (perform (fn [s f]
+                              (let [cancel ((->TrackerTask task !tracker-state) s f)]
+                                (set-cancel-most-recent cancel)
+                                cancel))))
+        task (m/sp
+              (try
+                (set-counter inc)
+                (m/? m/never)
+                (finally
+                  (set-counter dec))))
+        {:keys [state]} (use-atom !tracker-state)]
+
     (d/div
      (d/div "Running tasks: " counter)
-     (d/button {:on-click #(set-most-recent (scheduler (task)))}
+     (d/button {:on-click #(perform! task)}
                "Perform Task")
      (when (pos? counter)
-       (d/button {:on-click #(cancel-all scheduler)} "Cancel All"))
-     (when (= most-recent-state :running)
-       (d/button {:on-click #(most-recent)}
+       (d/button {:on-click #(core/cancel perform)} "Cancel All"))
+     (when (= state :running)
+       (d/button {:on-click #(cancel-most-recent)}
                  "Cancel Most Recent")))))
 
 (defnc ErrorsVsCancelation []
