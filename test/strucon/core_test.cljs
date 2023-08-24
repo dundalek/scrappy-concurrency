@@ -12,7 +12,8 @@
                       (m/sp
                        (swap! !results conj [:begin x])
                        (m/? (m/sleep sleep))
-                       (swap! !results conj [:end x])))]
+                       (swap! !results conj [:end x])
+                       [:result x]))]
      {:make-task make-task
       :!results !results})))
 
@@ -205,4 +206,30 @@
                      [:end 2] [:end 4]
                      [:begin 5] [:end 5]]
                     @!results))
+             (done))))))
+
+(deftest enqueued-join
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/enqueued {:max-concurrency 1})]
+           ((m/sp
+             (is (= [[:result 1] [:result 2] [:result 3]]
+                    (m/? (m/join vector
+                                 (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:end 1] [:begin 2] [:end 2] [:begin 3] [:end 3]]
+                    @!results))
+             (done))))))
+
+(deftest enqueued-race
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/enqueued {:max-concurrency 1})]
+           ((m/sp
+             (is (= [:result 1]
+                    (m/? (m/race (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:end 1]] @!results))
              (done))))))

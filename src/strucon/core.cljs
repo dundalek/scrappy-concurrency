@@ -107,9 +107,39 @@
      (reify
        IFn
        (-invoke [_ task]
-         (swap! !queue conj task)
-         (enqueued-maybe-start max-concurrency !current !queue)
-         nil)
+         (let [!drop-or-cancel (atom nil)
+               !watcher-s (atom nil)
+               !watcher-f (atom nil)
+               task-instance (fn [s f]
+                               (let [cancel (task (fn [x]
+                                                    (when-some [watcher @!watcher-s]
+                                                      (watcher x))
+                                                    (s x))
+                                                  (fn [e]
+                                                    (when-some [watcher @!watcher-f]
+                                                      (watcher e))
+                                                    (f e)))]
+                                 (reset! !drop-or-cancel cancel)
+                                 cancel))]
+           (reset! !drop-or-cancel
+                   (fn []
+                     (swap! !queue
+                            (fn [q]
+                              (into #queue []
+                                    (filter (complement #{task-instance}))
+                                    q)))
+                     (when (satisfies? Droppable task)
+                       (drop! task))
+                     (when-some [watcher @!watcher-f]
+                       ;; pass some value for cancelled?
+                       (watcher))))
+           (swap! !queue conj task-instance)
+           (enqueued-maybe-start max-concurrency !current !queue)
+           (fn [s f]
+             (reset! !watcher-s s)
+             (reset! !watcher-f f)
+             (fn []
+               (@!drop-or-cancel)))))
 
        Cancellable
        (cancel [_]
