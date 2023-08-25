@@ -210,6 +210,32 @@
                     @!results))
              (done))))))
 
+(deftest unbounded-join
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/unbounded)]
+           ((m/sp
+             (is (= [[:result 1] [:result 2] [:result 3]]
+                    (m/? (m/join vector
+                                 (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:end 1] [:end 2] [:end 3]]
+                    @!results))
+             (done))))))
+
+(deftest unbounded-race
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/unbounded)]
+           ((m/sp
+             (is (= [:result 1]
+                    (m/? (m/race (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:end 1]] @!results))
+             (done))))))
+
 (deftest enqueued-join
   (async done
          (let [{:keys [make-task !results]} (task-helper)

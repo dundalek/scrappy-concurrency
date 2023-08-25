@@ -83,19 +83,22 @@
 
 (defn unbounded-start [^Unbounded this task]
   (let [!instance (atom nil)
-        cancel (task (fn on-success []
-                       (set! (.-instances this)
-                             (disj (.-instances this) @!instance))
-                       (when (and (empty? (.-instances this))
-                                  (ifn? (.-success this)))
-                         ((.-success this))))
-                     (fn on-fail [e]))]
+        [wrapped-task observer-task] (observable-task task nil)
+        cancel (wrapped-task
+                (fn on-success []
+                  (set! (.-instances this)
+                        (disj (.-instances this) @!instance))
+                  (when (and (empty? (.-instances this))
+                             (ifn? (.-success this)))
+                    ((.-success this))))
+                (fn on-fail [e]
+                  (set! (.-instances this)
+                        (disj (.-instances this) @!instance))))]
                        ;; todo, probably cancel others and propagate
     (reset! !instance cancel)
     (set! (.-instances this)
           (conj (.-instances this) cancel))
-    ;; would return be useful for anything?
-    nil))
+    observer-task))
 
 (defn unbounded []
   (->Unbounded #{} nil))
