@@ -1,6 +1,7 @@
 (ns strucon.app
   (:require
    ["react-dom" :as rdom]
+   [clojure.string :as str]
    [goog.string :as gstr]
    [helix.core :refer [$ <>]]
    [helix.dom :as d]
@@ -351,6 +352,62 @@
                  "Restart Parent Task"
                  "Perform Parent Task")))))
 
+(def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
+(def loading-colors ["#ff8888" "#88ff88" "#8888ff"])
+
+(defn load-word-task [on-change]
+  (m/sp
+   (loop [percent 0]
+     (on-change percent)
+     (m/? (m/sleep (+ 100 (rand-int 100))))
+     (when (< percent 100)
+       (let [new-percent (min 100 (+ percent (rand-int 20)))]
+         (recur new-percent))))
+   (rand-nth words)))
+
+(defnc AwaitingMultipleChildTasks []
+  (let [[percents set-percents!] (hooks/use-state nil)
+        [status set-status!] (hooks/use-state "Waiting...")
+        [perform-parent] (hooks/use-state #(core/restartable))
+        [perform-child] (hooks/use-state #(core/enqueued {:max-concurrency 3}))
+        run (fn [method]
+              (perform-parent
+               (m/sp
+                (set-status! "Waiting for child tasks to complete...")
+                (set-percents! (vec (repeat 5 {:percent 0 :word nil})))
+                (let [tasks (->> (range 5)
+                                 (map (fn [i]
+                                        (core/cancel-shield
+                                         (perform-child
+                                          (m/sp
+                                           (let [result (m/? (load-word-task
+                                                              #(set-percents! assoc-in [i :percent] %)))]
+                                             (set-percents! assoc-in [i :word] result)
+                                             result)))))))
+                      words (case method
+                              :join (m/? (apply m/join vector tasks))
+                              :race [(m/? (apply m/race tasks))])]
+                  (set-status! (str "Done: " (str/join ", " words)))))))]
+    (d/div
+     (d/div status)
+     (d/button {:on-click #(run :join)}
+               "join")
+     (d/button {:on-click #(run :race)}
+               "race")
+     (d/div
+      (for [[{:keys [percent word]} i color] (map list percents (range) (cycle loading-colors))]
+        (d/div {:key i
+                :style {:background-color color
+                        :width (str percent "%")
+                        :transition (when (pos? percent) "width 0.5s")
+                        :border-radius "3px"
+                        :line-height "40px"
+                        :white-space "nowrap"
+                        :margin "10px 0"}}
+               (str "Progress: " percent "%")
+               (when word
+                 (str " Word: " word))))))))
+
 (defnc App []
   (d/div
    (d/h1 "Welcome!")
@@ -362,6 +419,8 @@
    ($ ErrorsVsCancelation)
    (d/h2 "Child Tasks")
    ($ ChildTasks)
+   (d/h2 "Awaiting Multiple Child Tasks")
+   ($ AwaitingMultipleChildTasks)
    (d/h2 "Task Modifiers")
    (d/h3 "unbounded: Tasks run concurrently")
    (d/div
