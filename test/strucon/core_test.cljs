@@ -288,6 +288,32 @@
              (is (= [[:begin 1] [:end 1]] @!results))
              (done))))))
 
+(deftest dropping-join
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/dropping {:max-concurrency 1})]
+           ((m/sp
+             (is (= [[:result 1] nil nil]
+                    (m/? (m/join vector
+                                 (core/cancel-shield (perform (make-task 1)))
+                                 (core/cancel-shield (perform (make-task 2)))
+                                 (core/cancel-shield (perform (make-task 3)))))))
+             (is (= [[:begin 1] [:end 1]]
+                    @!results))
+             (done))))))
+
+(deftest dropping-race
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/dropping {:max-concurrency 1})]
+           ((m/sp
+             (is (= [:result 1]
+                    (m/? (m/race (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:end 1]] @!results))
+             (done))))))
+
 (deftest keeping-latest-join
   (async done
          (let [{:keys [make-task !results]} (task-helper)

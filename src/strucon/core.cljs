@@ -205,17 +205,19 @@
      (reify
        IFn
        (-invoke [_ task]
-         (cond
-           (< (count @!current) max-concurrency)
-           (start-task! !current task
-                        (fn []
-                          (when (empty? @!current)
-                            (when (ifn? @!s)
-                              (@!s))))
-                        (fn []))
+         (let [[wrapped-task observer-task] (observable-task task (fn []))]
+           (cond
+             (< (count @!current) max-concurrency)
+             (start-task! !current wrapped-task
+                          (fn []
+                            (when (empty? @!current)
+                              (when (ifn? @!s)
+                                (@!s))))
+                          (fn []))
 
-           (satisfies? Droppable task)
-           (drop! task)))
+             (satisfies? Droppable wrapped-task)
+             (drop! wrapped-task))
+           observer-task))
        (-invoke [_ s f]
          (reset! !s s))
 
