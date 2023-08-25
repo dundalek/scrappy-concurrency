@@ -25,18 +25,21 @@
   (let [!drop-or-cancel (atom nil)
         !watcher-s (atom nil)
         !watcher-f (atom nil)
-        !dropped (atom false)
+        !bound (atom nil)
+        !value (atom nil)
         wrapped-task (reify
                        IFn
                        (-invoke [_ s f]
                          (let [cancel (task
                                        (fn [x]
-                                          ;; set bound state here?
+                                         (reset! !bound :success)
+                                         (reset! !value x)
                                          (when-some [watcher @!watcher-s]
                                            (watcher x))
                                          (s x))
                                        (fn [e]
-                                         ;; set something like dropped also here?
+                                         (reset! !bound :error)
+                                         (reset! !value e)
                                          (when-some [watcher @!watcher-f]
                                            (watcher e))
                                          (f e)))]
@@ -45,18 +48,22 @@
 
                        Droppable
                        (drop! [this]
-                         (reset! !dropped true)
-                         (drop-task this)
-                         (when (satisfies? Droppable task)
-                           (drop! task))
-                         (when-some [watcher @!watcher-f]
-                           ;; pass some value for cancelled?
-                           (watcher))))
+                         (let [e (cancelled "Dropped")]
+                           (reset! !bound :error)
+                           (reset! !value e)
+                           (drop-task this)
+                           (when (satisfies? Droppable task)
+                             (drop! task))
+                           (when-some [watcher @!watcher-f]
+                             (watcher e)))))
         observer-task (fn [s f]
-                        (if @!dropped
-                          (do
-                            (f (cancelled "Dropped"))
-                            (fn nop []))
+                        (case @!bound
+                          :success (do
+                                     (s @!value)
+                                     (fn nop []))
+                          :error (do
+                                   (f @!value)
+                                   (fn nop []))
                           (do
                             (reset! !watcher-s s)
                             (reset! !watcher-f f)
@@ -139,12 +146,14 @@
            (let [cancel (first @!current)]
              (remove-task! !current cancel)
              (cancel)))
-         (start-task! !current task
-                      (fn []
-                        (when (empty? @!current)
-                          (when (ifn? @!s)
-                            (@!s))))
-                      (fn [])))
+         (let [[wrapped-task observer-task] (observable-task task nil)]
+           (start-task! !current wrapped-task
+                        (fn []
+                          (when (empty? @!current)
+                            (when (ifn? @!s)
+                              (@!s))))
+                        (fn []))
+           observer-task))
        (-invoke [_ s f]
          (reset! !s s))
 

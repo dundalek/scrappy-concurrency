@@ -236,6 +236,32 @@
              (is (= [[:begin 1] [:begin 2] [:begin 3] [:end 1]] @!results))
              (done))))))
 
+(deftest restartable-join
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/restartable)]
+           ((m/sp
+             (is (= [nil nil [:result 3]]
+                    (m/? (m/join vector
+                                 (core/cancel-shield (perform (make-task 1)))
+                                 (core/cancel-shield (perform (make-task 2)))
+                                 (core/cancel-shield (perform (make-task 3)))))))
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:end 3]]
+                    @!results))
+             (done))))))
+
+(deftest restartable-race
+  (async done
+         (let [{:keys [make-task !results]} (task-helper)
+               perform (core/restartable)]
+           ((m/sp
+             (is (= [:result 3]
+                    (m/? (m/race (perform (make-task 1))
+                                 (perform (make-task 2))
+                                 (perform (make-task 3))))))
+             (is (= [[:begin 1] [:begin 2] [:begin 3] [:end 3]] @!results))
+             (done))))))
+
 (deftest enqueued-join
   (async done
          (let [{:keys [make-task !results]} (task-helper)
