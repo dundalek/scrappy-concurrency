@@ -95,7 +95,7 @@
                                 {:value x})
                          (success x))
                        (fn [e]
-                         (if (-> e ex-data :cancelled)
+                         (if (core/cancelled? e)
                            (swap! !state merge
                                   (instance-state-map :canceled))
                            (swap! !state merge
@@ -286,7 +286,7 @@
                   (catch :default e
                     ;; This is difference to ember-concurrency, which does not consider cancellation an error
                     ;; Maybe reconsider later
-                    (when-not (-> e ex-data :cancelled)
+                    (when-not (core/cancelled? e)
                       (set-num-errors inc)))
                   (finally
                     (set-num-finallys inc)))))

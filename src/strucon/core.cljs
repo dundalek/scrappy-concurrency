@@ -1,10 +1,69 @@
-(ns strucon.core)
+(ns strucon.core
+  (:import
+   (missionary Cancelled)))
+
+(defn cancelled [msg]
+  (Cancelled. msg))
+
+(defn cancelled? [e]
+  (instance? Cancelled e))
+
+(defn cancel-shield [task]
+  (fn [s f]
+    (task s (fn [e]
+              (if (instance? Cancelled e)
+                (s nil)
+                (f e))))))
 
 (defprotocol Cancellable
   (cancel [_]))
 
 (defprotocol Droppable
   (drop! [_]))
+
+(defn- observable-task [task drop-task]
+  (let [!drop-or-cancel (atom nil)
+        !watcher-s (atom nil)
+        !watcher-f (atom nil)
+        !dropped (atom false)
+        wrapped-task (reify
+                       IFn
+                       (-invoke [_ s f]
+                         (let [cancel (task
+                                       (fn [x]
+                                          ;; set bound state here?
+                                         (when-some [watcher @!watcher-s]
+                                           (watcher x))
+                                         (s x))
+                                       (fn [e]
+                                         ;; set something like dropped also here?
+                                         (when-some [watcher @!watcher-f]
+                                           (watcher e))
+                                         (f e)))]
+                           (reset! !drop-or-cancel cancel)
+                           cancel))
+
+                       Droppable
+                       (drop! [this]
+                         (reset! !dropped true)
+                         (drop-task this)
+                         (when (satisfies? Droppable task)
+                           (drop! task))
+                         (when-some [watcher @!watcher-f]
+                           ;; pass some value for cancelled?
+                           (watcher))))
+        observer-task (fn [s f]
+                        (if @!dropped
+                          (do
+                            (f (cancelled "Dropped"))
+                            (fn nop []))
+                          (do
+                            (reset! !watcher-s s)
+                            (reset! !watcher-f f)
+                            (fn [] (@!drop-or-cancel)))))]
+    (reset! !drop-or-cancel
+            (fn [] (drop! wrapped-task)))
+    [wrapped-task observer-task]))
 
 (declare unbounded-start)
 
@@ -107,39 +166,17 @@
      (reify
        IFn
        (-invoke [_ task]
-         (let [!drop-or-cancel (atom nil)
-               !watcher-s (atom nil)
-               !watcher-f (atom nil)
-               task-instance (fn [s f]
-                               (let [cancel (task (fn [x]
-                                                    (when-some [watcher @!watcher-s]
-                                                      (watcher x))
-                                                    (s x))
-                                                  (fn [e]
-                                                    (when-some [watcher @!watcher-f]
-                                                      (watcher e))
-                                                    (f e)))]
-                                 (reset! !drop-or-cancel cancel)
-                                 cancel))]
-           (reset! !drop-or-cancel
-                   (fn []
-                     (swap! !queue
-                            (fn [q]
-                              (into #queue []
-                                    (filter (complement #{task-instance}))
-                                    q)))
-                     (when (satisfies? Droppable task)
-                       (drop! task))
-                     (when-some [watcher @!watcher-f]
-                       ;; pass some value for cancelled?
-                       (watcher))))
-           (swap! !queue conj task-instance)
+         (let [[wrapped-task observer-task] (observable-task
+                                             task
+                                             (fn [dropped-task]
+                                               (swap! !queue
+                                                      (fn [q]
+                                                        (into #queue []
+                                                              (filter (complement #{dropped-task}))
+                                                              q)))))]
+           (swap! !queue conj wrapped-task)
            (enqueued-maybe-start max-concurrency !current !queue)
-           (fn [s f]
-             (reset! !watcher-s s)
-             (reset! !watcher-f f)
-             (fn []
-               (@!drop-or-cancel)))))
+           observer-task))
 
        Cancellable
        (cancel [_]
@@ -197,10 +234,15 @@
        IFn
        (-invoke [_ task]
          (when-some [waiting-task @!waiting]
-           (when (satisfies? Droppable waiting-task)
-             (drop! waiting-task)))
-         (reset! !waiting task)
-         (keeping-latest-maybe-start max-concurrency !current !waiting !s))
+           (drop! waiting-task))
+         (let [[wrapped-task observer-task] (observable-task
+                                             task
+                                             (fn [dropped-task]
+                                               (when (identical? dropped-task @!waiting)
+                                                 (reset! !waiting nil))))]
+           (reset! !waiting wrapped-task)
+           (keeping-latest-maybe-start max-concurrency !current !waiting !s)
+           observer-task))
        (-invoke [_ s f]
          (reset! !s s))
 
@@ -208,4 +250,3 @@
        (cancel [_]
          (reset! !waiting nil)
          (cancel-current! !current))))))
-
