@@ -414,6 +414,84 @@
                (when word
                  (str " Word: " word))))))))
 
+;; Happy Eyballs implementation from:
+;; https://github.com/leonoel/missionary/blob/master/doc/guides/happy_eyeballs.md
+(defn attempt [chosen delay close! connectors]
+  (if-some [[connector & connectors] connectors]
+    ;; assigning this dataflow variable will trigger next attempt
+    (let [trigger (m/dfv)]
+      (m/race
+        ;; try to connect to endpoing
+       (m/sp (try (let [x (m/? connector)
+                        y (chosen x)]
+                     ;; if another attempt succeeded, close socket before terminate
+                    (when-not (identical? x y) (close! x)) y)
+                  (catch :default e
+                     ;; if attempt fails early, trigger next attempt immediately
+                    (trigger nil)
+                    (throw e))))
+        ;; trigger next attempt if still pending after delay
+       (m/sp (m/? (m/sleep delay))
+             (trigger nil)
+             (m/? m/never))
+        ;; wait for trigger and recursively try next endpoints
+       (m/sp (m/? trigger)
+             (m/? (attempt chosen delay close! connectors)))))
+    ;; no more endpoint, return a failing task
+    (m/race)))
+
+(defn happyeyeballs [delay close! connectors]
+  (m/sp
+   (try
+     (m/? (attempt (m/dfv) delay close! connectors))
+     (catch :default _
+       (throw (ex-info "Unable to reach target."
+                       {:delay delay
+                        :close! close!
+                        :connectors connectors}))))))
+
+(defnc HappyEyeballsGraph []
+  (let [{:keys [start stop] :as animation} (use-animation)
+        [!trackers] (hooks/use-state #(atom []))
+        [status set-status!] (hooks/use-state "Idle")
+        [perform] (hooks/use-state #(core/restartable))
+        trackers (use-atom !trackers)
+        perform! (fn []
+                   (start)
+                   (let [connectors (->> (range 1 5)
+                                         (mapv (fn [i]
+                                                 (make-tracker
+                                                  (m/sp
+                                                   (m/? (m/sleep (+ 300 (rand-int 1500))))
+                                                   (if (< (rand) 0.5)
+                                                     (throw (js/Error. (str "Failed " i)))
+                                                     (str "Chosen " i)))))))]
+                     (swap! !trackers into connectors)
+                     (perform (m/sp
+                               (set-status! "Running")
+                               (set-status! (try
+                                              (m/? (happyeyeballs 500 (fn [_]) connectors))
+                                              (catch :default _
+                                                "All failed")))))))
+        clear-timeline! (fn []
+                          (stop)
+                          (core/cancel perform)
+                          (reset! !trackers [])
+                          (set-status! "Idle"))]
+    (d/div
+     (d/div
+      (d/div status)
+      (d/button {:on-click perform!}
+                "Perform")
+      (d/button {:on-click clear-timeline!}
+                "Clear Timeline")
+      #_(when (pos? running-count)
+          (d/button {:on-click #(core/cancel perform)}
+                    "Cancel all")))
+     ($ TaskGraph {:animation animation
+                   :trackers trackers
+                   :num-tracks 4}))))
+
 (defnc App []
   (d/div
    (d/h1 "Welcome!")
@@ -427,6 +505,8 @@
    ($ ChildTasks)
    (d/h2 "Awaiting Multiple Child Tasks")
    ($ AwaitingMultipleChildTasks)
+   (d/h2 "Happy Eyeballs")
+   ($ HappyEyeballsGraph)
    (d/h2 "Task Modifiers")
    (d/h3 "unbounded: Tasks run concurrently")
    (d/div
