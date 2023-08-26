@@ -148,10 +148,10 @@
     "running"
     "idle"))
 
-(defnc Tracker [{:keys [id tracker time scale-x]}]
+(defnc Tracker [{:keys [id tracker time scale-x num-tracks]}]
   (let [{:keys [state perform-time start-time end-time]} (use-atom tracker)
         color (get colors (mod id (count colors)))
-        y (* (mod id 6) track-height)]
+        y (* (mod id num-tracks) track-height)]
     (d/g {:height track-height}
          (when start-time
            (let [x (scale-x start-time)
@@ -176,8 +176,30 @@
                     (gstr/capitalize (name state)))
             (d/line {:x1 (str x "%") :x2 (str x "%") :y1 y :y2 (+ y 20) :stroke color}))))))
 
+(defnc TaskGraph [{:keys [animation trackers num-tracks] :or {num-tracks 6}}]
+  (let [{:keys [start-time time]} animation
+        time-elapsed (max (- time start-time) 10000)
+        scale-x (fn [x]
+                  (* (/ (- x start-time)
+                        time-elapsed)
+                     100))]
+    (d/svg {:style {:width "100%"}}
+           (for [[id tracker] (map-indexed list trackers)]
+             ($ Tracker {:key id
+                         :id id
+                         :tracker tracker
+                         :time time
+                         :scale-x scale-x
+                         :num-tracks num-tracks}))
+           (let [x (scale-x time)]
+             (d/line {:x1 (str x "%")
+                      :x2 (str x "%")
+                      :y1 0
+                      :y2 "100%"
+                      :stroke "black"})))))
+
 (defnc Graph [{:keys [perform]}]
-  (let [{:keys [start-time time start stop]} (use-animation)
+  (let [{:keys [start stop] :as animation} (use-animation)
         [!trackers] (hooks/use-state #(atom []))
         [running-count set-running-count!] (hooks/use-state 0)
         perform-with-tracker (fn [task]
@@ -187,11 +209,6 @@
                                  (perform tracker-task)
                                  tracker-task))
         trackers (use-atom !trackers)
-        time-elapsed (max (- time start-time) 10000)
-        scale-x (fn [x]
-                  (* (/ (- x start-time)
-                        time-elapsed)
-                     100))
         perform! (fn []
                    (start)
                    (swap! !trackers conj
@@ -209,19 +226,8 @@
       (when (pos? running-count)
         (d/button {:on-click #(core/cancel perform)}
                   "Cancel all")))
-     (d/svg {:style {:width "100%"}}
-            (for [[id tracker] (map-indexed list trackers)]
-              ($ Tracker {:key id
-                          :id id
-                          :tracker tracker
-                          :time time
-                          :scale-x scale-x}))
-            (let [x (scale-x time)]
-              (d/line {:x1 (str x "%")
-                       :x2 (str x "%")
-                       :y1 0
-                       :y2 "100%"
-                       :stroke "black"}))))))
+     ($ TaskGraph {:animation animation
+                   :trackers trackers}))))
 
 (defnc DefiningTasks []
   (let [[status set-status] (hooks/use-state nil)
