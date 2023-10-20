@@ -1,6 +1,7 @@
 node_modules
 js/
 /package-lock.json
+/bun.lockb
 .shadow-cljs/
 /.cpcache
 /.clj-kondo/
@@ -8,3 +9,4 @@ js/
 /.lsp
 /build
 .nrepl-port
+/target

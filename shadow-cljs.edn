@@ -17,4 +17,9 @@
                               strucon.dev]}}
 
   :test {:target :browser-test
-         :test-dir "build/test"}}}
+         :test-dir "build/test"}
+
+  :ci {:target :karma
+       :output-to "target/ci.js"
+       :compiler-options {:optimizations :simple
+                          :source-map true}}}}
