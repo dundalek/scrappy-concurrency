@@ -361,14 +361,22 @@
 (def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
 (def loading-colors ["#ff8888" "#88ff88" "#8888ff"])
 
+(def percents
+  (m/ap
+   (loop [percent 0]
+     (m/amb
+      percent
+      (if (< percent 100)
+        (do
+          (m/? (m/sleep (+ 100 (rand-int 100))))
+          (let [new-percent (min 100 (+ percent (rand-int 20)))]
+            (recur new-percent)))
+        (m/amb))))))
+
 (defn load-word-task [on-change]
   (m/sp
-   (loop [percent 0]
-     (on-change percent)
-     (m/? (m/sleep (+ 100 (rand-int 100))))
-     (when (< percent 100)
-       (let [new-percent (min 100 (+ percent (rand-int 20)))]
-         (recur new-percent))))
+   (m/? (m/reduce (fn [_ p] (on-change p))
+                  nil percents))
    (rand-nth words)))
 
 (defnc AwaitingMultipleChildTasks []
