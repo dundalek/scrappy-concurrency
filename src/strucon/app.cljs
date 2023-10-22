@@ -543,7 +543,13 @@
     ($ Graph {:perform (core/dropping {:max-concurrency 3})}))
    (d/h3 "keepLatest with max-concurrency: 3")
    (d/div
-    ($ Graph {:perform (core/keeping-latest {:max-concurrency 3})}))))
+    ($ Graph {:perform (core/keeping-latest {:max-concurrency 3})}))
+   (d/h3 "Task Groups alternative: apply constraints to multiple tasks")
+   ;; https://youtu.be/VEzVDOmY-dc?si=uUMHF1ofO_EtZAFw&t=849
+   (let [perform (core/restartable)]
+     (d/div
+      ($ Graph {:perform perform})
+      ($ Graph {:perform perform})))))
 
 (defn ^:export main
   []
