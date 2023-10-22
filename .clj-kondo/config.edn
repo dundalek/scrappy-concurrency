@@ -1,3 +1,4 @@
 {:lint-as {helix.core/defnc clojure.core/defn
            helix.hooks/use-memo clojure.core/fn
-           strucon.lib/defnc clojure.core/defn}}
+           strucon.lib/defnc clojure.core/defn
+           strucon.core-test/deftest+ clojure.test/deftest}}

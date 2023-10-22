@@ -4,8 +4,8 @@ js/
 /bun.lockb
 .shadow-cljs/
 /.cpcache
-/.clj-kondo/
-!/.clj-kondo/config.edn
+.clj-kondo/
+!.clj-kondo/config.edn
 /.lsp
 /build
 .nrepl-port

@@ -1,6 +1,7 @@
 (ns strucon.core
   (:import
-   (missionary Cancelled)))
+   (missionary Cancelled)
+   #?(:clj [clojure.lang IFn])))
 
 (defn cancelled [msg]
   (Cancelled. msg))
@@ -29,7 +30,7 @@
         !value (atom nil)
         wrapped-task (reify
                        IFn
-                       (-invoke [_ s f]
+                       (invoke [_ s f]
                          (let [cancel (task
                                        (fn [x]
                                          (reset! !bound :success)
@@ -72,14 +73,30 @@
             (fn [] (drop! wrapped-task)))
     [wrapped-task observer-task]))
 
-(declare unbounded-start)
-
-(deftype Unbounded [^:mutable instances
-                    ^:mutable success]
+(deftype Unbounded [^:volatile-mutable instances
+                    ^:volatile-mutable success]
   IFn
-  (-invoke [this task]
-    (unbounded-start this task))
-  (-invoke [this s f]
+  (invoke [this task]
+    (let [!instance (atom nil)
+          [wrapped-task observer-task] (observable-task task nil)
+          cancel (wrapped-task
+                  (fn on-success [x]
+                    (set! (.-instances this)
+                          (disj (.-instances this) @!instance))
+                    (when (empty? (.-instances this))
+                      ; (println "finished")
+                      (when (ifn? (.-success this))
+                        ; (println "calling success")
+                        ((.-success this) x))))
+                  (fn on-fail [e]
+                    (set! (.-instances this)
+                          (disj (.-instances this) @!instance))))]
+                         ;; todo, probably cancel others and propagate
+      (reset! !instance cancel)
+      (set! (.-instances this)
+            (conj (.-instances this) cancel))
+      observer-task))
+  (invoke [this s f]
     (set! (.-success this) s))
 
   Cancellable
@@ -87,25 +104,6 @@
     (doseq [cancel instances]
       (cancel))
     (set! instances #{})))
-
-(defn unbounded-start [^Unbounded this task]
-  (let [!instance (atom nil)
-        [wrapped-task observer-task] (observable-task task nil)
-        cancel (wrapped-task
-                (fn on-success []
-                  (set! (.-instances this)
-                        (disj (.-instances this) @!instance))
-                  (when (and (empty? (.-instances this))
-                             (ifn? (.-success this)))
-                    ((.-success this))))
-                (fn on-fail [e]
-                  (set! (.-instances this)
-                        (disj (.-instances this) @!instance))))]
-                       ;; todo, probably cancel others and propagate
-    (reset! !instance cancel)
-    (set! (.-instances this)
-          (conj (.-instances this) cancel))
-    observer-task))
 
 (defn unbounded []
   (->Unbounded #{} nil))
@@ -141,20 +139,20 @@
      (assert (pos? max-concurrency))
      (reify
        IFn
-       (-invoke [_ task]
+       (invoke [_ task]
          (when (<= max-concurrency (count @!current))
            (let [cancel (first @!current)]
              (remove-task! !current cancel)
              (cancel)))
          (let [[wrapped-task observer-task] (observable-task task nil)]
            (start-task! !current wrapped-task
-                        (fn []
+                        (fn [x]
                           (when (empty? @!current)
                             (when (ifn? @!s)
-                              (@!s))))
-                        (fn []))
+                              (@!s nil))))
+                        (fn [e]))
            observer-task))
-       (-invoke [_ s f]
+       (invoke [_ s f]
          (reset! !s s))
 
        Cancellable
@@ -165,25 +163,28 @@
     (when-some [task (peek @!queue)]
       (swap! !queue pop)
       (start-task! !current task
-                   (fn [] (enqueued-maybe-start max-concurrency !current !queue))
-                   (fn [])))))
+                   (fn [_] (enqueued-maybe-start max-concurrency !current !queue))
+                   (fn [_])))))
+
+(def empty-queue #?(:cljs #queue []
+                    :clj (clojure.lang.PersistentQueue/EMPTY)))
 
 (defn enqueued
   ([] (enqueued {}))
   ([{:keys [max-concurrency]}]
    (let [max-concurrency (or max-concurrency 1)
          !current (atom [])
-         !queue (atom #queue [])]
+         !queue (atom empty-queue)]
      (assert (pos? max-concurrency))
      (reify
        IFn
-       (-invoke [_ task]
+       (invoke [_ task]
          (let [[wrapped-task observer-task] (observable-task
                                              task
                                              (fn [dropped-task]
                                                (swap! !queue
                                                       (fn [q]
-                                                        (into #queue []
+                                                        (into empty-queue
                                                               (filter (complement #{dropped-task}))
                                                               q)))))]
            (swap! !queue conj wrapped-task)
@@ -192,7 +193,7 @@
 
        Cancellable
        (cancel [_]
-         (reset! !queue #queue [])
+         (reset! !queue empty-queue)
          (cancel-current! !current))))))
 
 (defn dropping
@@ -204,21 +205,21 @@
      (assert (pos? max-concurrency))
      (reify
        IFn
-       (-invoke [_ task]
-         (let [[wrapped-task observer-task] (observable-task task (fn []))]
+       (invoke [_ task]
+         (let [[wrapped-task observer-task] (observable-task task (fn [_]))]
            (cond
              (< (count @!current) max-concurrency)
              (start-task! !current wrapped-task
-                          (fn []
+                          (fn [x]
                             (when (empty? @!current)
                               (when (ifn? @!s)
-                                (@!s))))
-                          (fn []))
+                                (@!s nil))))
+                          (fn [e]))
 
              (satisfies? Droppable wrapped-task)
              (drop! wrapped-task))
            observer-task))
-       (-invoke [_ s f]
+       (invoke [_ s f]
          (reset! !s s))
 
        Cancellable
@@ -230,8 +231,8 @@
       (do
         (reset! !waiting nil)
         (start-task! !current task
-                     (fn [] (keeping-latest-maybe-start max-concurrency !current !waiting !s))
-                     (fn [])))
+                     (fn [_] (keeping-latest-maybe-start max-concurrency !current !waiting !s))
+                     (fn [_])))
       (when (empty? @!current)
         (when (ifn? @!s)
           (@!s))))))
@@ -246,7 +247,7 @@
      (assert (pos? max-concurrency))
      (reify
        IFn
-       (-invoke [_ task]
+       (invoke [_ task]
          (when-some [waiting-task @!waiting]
            (drop! waiting-task))
          (let [[wrapped-task observer-task] (observable-task
@@ -257,7 +258,7 @@
            (reset! !waiting wrapped-task)
            (keeping-latest-maybe-start max-concurrency !current !waiting !s)
            observer-task))
-       (-invoke [_ s f]
+       (invoke [_ s f]
          (reset! !s s))
 
        Cancellable
