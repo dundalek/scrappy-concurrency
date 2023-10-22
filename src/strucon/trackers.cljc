@@ -2,7 +2,7 @@
   (:require
    [strucon.core :as core]
    [strucon.protocols :as protocols])
-  #?(:clj (:import [clojure.lang IDeref IFn])))
+  #?(:clj (:import [clojure.lang IDeref IFn IRef])))
 
 ;; waiting -> running
 ;; waiting -> dropped
@@ -20,25 +20,41 @@
                   (= state :dropped))
    :successful? (= state :finished)}) ; proably rename :finished to success
 
-(deftype TaskInstance [task !state]
-  IFn
-  (-invoke [_ failure success]
-    (task failure success))
+#?(:cljs
+   (deftype TaskInstance [task !state]
+     IFn
+     (-invoke [_ failure success]
+       (task failure success))
 
-  IDeref
-  (-deref [_] @!state)
+     IDeref
+     (-deref [_] @!state)
 
-  IWatchable
-  (-notify-watches [_ oldval newval]
-    #?(:cljs (-notify-watches !state oldval newval)
-       :clj (.notifyWatches !state oldval newval)))
-  (-add-watch [_ key f]
-    (add-watch !state key f))
-  (-remove-watch [_ key]
-    (remove-watch !state key))
+     IWatchable
+     (-add-watch [_ key f]
+       (add-watch !state key f))
+     (-remove-watch [_ key]
+       (remove-watch !state key))
 
-  protocols/Droppable
-  (drop! [_] (swap! !state merge (instance-state-map :dropped))))
+     protocols/Droppable
+     (drop! [_] (swap! !state merge (instance-state-map :dropped)))))
+
+#?(:clj
+   (deftype TaskInstance [task !state]
+     IFn
+     (invoke [_ failure success]
+       (task failure success))
+
+     IDeref
+     (deref [_] @!state)
+
+     IRef
+     (addWatch [_ key f]
+       (add-watch !state key f))
+     (removeWatch [_ key]
+       (remove-watch !state key))
+
+     protocols/Droppable
+     (drop! [_] (swap! !state merge (instance-state-map :dropped)))))
 
 (defn state-tracked-task [task !state]
   (swap! !state merge
@@ -64,19 +80,23 @@
                          (failure e)))]
       cancel)))
 
-(defn time-tracked-task [task !state]
-  (swap! !state assoc
-         :perform-time (js/Date.now)
-         :start-time nil
-         :end-time nil)
-  (fn [success failure]
-    (swap! !state assoc :start-time (js/Date.now))
-    (task (fn [x]
-            (swap! !state assoc :end-time (js/Date.now))
-            (success x))
-          (fn [e]
-            (swap! !state assoc :end-time (js/Date.now))
-            (failure e)))))
+(defn time-tracked-task
+  ([task !state]
+   (time-tracked-task task !state
+                      #?(:cljs #(js/Date.now))))
+  ([task !state now]
+   (swap! !state assoc
+          :perform-time (now)
+          :start-time nil
+          :end-time nil)
+   (fn [success failure]
+     (swap! !state assoc :start-time (now))
+     (task (fn [x]
+             (swap! !state assoc :end-time (now))
+             (success x))
+           (fn [e]
+             (swap! !state assoc :end-time (now))
+             (failure e))))))
 
 (defn tracked-task [task !state]
   (-> task
