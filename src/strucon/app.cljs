@@ -8,6 +8,7 @@
    [helix.hooks :as hooks]
    [missionary.core :as m]
    [strucon.core :as core]
+   [strucon.protocols :as protocols]
    [strucon.lib :refer [defnc]]))
 
 (def track-height 20)
@@ -80,7 +81,7 @@
   (-remove-watch [_ key]
     (-remove-watch !state key))
 
-  core/Droppable
+  protocols/Droppable
   (drop! [_] (swap! !state merge (instance-state-map :dropped))))
 
 (defn state-tracked-task [task !state]

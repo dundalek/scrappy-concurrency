@@ -1,4 +1,5 @@
 (ns strucon.core
+  (:require [strucon.protocols :as protocols :refer [Droppable Cancellable drop!]])
   (:import
    (missionary Cancelled)
    #?(:clj [clojure.lang IFn])))
@@ -16,11 +17,8 @@
                 (s nil)
                 (f e))))))
 
-(defprotocol Cancellable
-  (cancel [_]))
-
-(defprotocol Droppable
-  (drop! [_]))
+(defn cancel [task]
+  (protocols/cancel task))
 
 (defn- observable-task [task drop-task]
   (let [!drop-or-cancel (atom nil)
