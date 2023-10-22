@@ -54,6 +54,11 @@
                               #(remove-watch sub-atom k)))})]
     (hooks/use-subscription sub)))
 
+;; waiting -> running
+;; waiting -> dropped
+;; running -> finished
+;; running -> canceled
+;; running -> error
 (defn- instance-state-map [state]
   {:state state
    :started? (not= state :waiting) ; rename to idle?
@@ -90,6 +95,8 @@
          {:value nil
           :error nil})
   (fn [success failure]
+    (assert (= (:state @!state) :waiting)
+            "Tracked task should be started only once. Create new tracker instance for each perform")
     (swap! !state merge (instance-state-map :running))
     (let [cancel (task (fn [x]
                          (swap! !state merge
@@ -127,11 +134,7 @@
 
 (defn make-tracker [task]
   (let [!state (atom {})
-        wrapped-task (tracked-task task !state)
-        wrapped-task (fn [s f]
-                       (assert (= (:state @!state) :waiting)
-                               "Tracked task should be started only once. Create new tracker instance for each perform")
-                       (wrapped-task s f))]
+        wrapped-task (tracked-task task !state)]
     (->TaskInstance wrapped-task !state)))
 
 (defn make-running-tracker [task update-running-count!]
@@ -555,4 +558,3 @@
 (defn ^:export main
   []
   (rdom/render ($ App) (js/document.getElementById "app")))
-
