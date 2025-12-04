@@ -7,9 +7,9 @@ This is an implementation of [ember-concurrency](https://github.com/machty/ember
 
 The [online demo](https://scrappy-concurrency.pages.dev/) showcases examples from ember-concurrency [reference docs](https://ember-concurrency.com/docs/task-function-syntax).
 
-Demo of the [Happy Eyeballs](https://en.wikipedia.org/wiki/Happy_Eyeballs) algorithm:
+Demo visualizing concurrent tasks of the [Happy Eyeballs](https://en.wikipedia.org/wiki/Happy_Eyeballs) algorithm:
 
-[screenshot here]
+[![Happy Eyeballs visualization](https://github.com/user-attachments/assets/24cb751a-8ac9-4280-9d65-ec8b707e756d)](https://scrappy-concurrency.pages.dev/)
 
 ## Concepts
 
