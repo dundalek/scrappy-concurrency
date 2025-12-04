@@ -467,7 +467,7 @@
 
 (defnc App []
   (d/div
-   (d/h1 "Welcome!")
+   (d/h1 "Scrappy Concurrency demos")
    (d/h2 "Defining Tasks")
    ($ DefiningTasks)
    (d/h2 "Cancelation")

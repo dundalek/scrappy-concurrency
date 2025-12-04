@@ -10,3 +10,4 @@ js/
 /build
 .nrepl-port
 /target
+/public/js/

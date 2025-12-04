@@ -12,4 +12,16 @@
 
          test:watch
          {:doc  "runs tests in watch mode"
-          :task (clojure {:dir "."} "-M:test --watch")}}}
+          :task (clojure {:dir "."} "-M:test --watch")}
+
+         build
+         {:doc "Build the demo app"
+          :requires [[babashka.fs :as fs]]
+          :task (do
+                  (fs/delete-tree "public/js")
+                  (shell "clojure -M:shadow -m shadow.cljs.devtools.cli release app"))}
+
+         deploy
+         {:doc "Deploy the demo app"
+          :depends [build]
+          :task (shell "bunx wrangler pages deploy --project-name scrappy-concurrency public")}}}
