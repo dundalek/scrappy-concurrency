@@ -269,6 +269,60 @@
                  "Restart Parent Task"
                  "Perform Parent Task")))))
 
+(defnc TaskStateRow [{:keys [label tracker]}]
+  (let [task-state (use-atom tracker)
+        {:keys [value error successful? error?]} task-state]
+    (d/tr
+     (d/td label)
+     (d/td value)
+     (d/td error)
+     (d/td (str successful?))
+     (d/td (str error?)))))
+
+(def executor-common-properties
+  [:last :last-successful :last-errored])
+
+(def executor-extra-properties
+  [:last-complete :last-performed :last-incomplete :last-canceled])
+
+(defnc DerivedState []
+  (let [[show-less-common-properties set-show-less-common-properties!] (hooks/use-state false)
+        properties (cond-> executor-common-properties
+                     show-less-common-properties (concat executor-extra-properties))
+        [!instances] (hooks/use-state (fn []
+                                        (atom {:perform-count 10
+                                               :num-running 3
+                                               :last (atom {:value "last val" :error nil :successful? false :error? false})
+                                               :last-successful (atom {:value "s val" :error nil :successful? false :error? false})
+                                               :last-errored (atom {:value nil :error "last error" :successful? false :error? false})})
+                                        #_(make-tracker (fn nop []))))
+        instances (use-atom !instances)]
+    (d/div
+     (d/div
+      (d/label
+       (d/input {:type "checkbox"
+                 :checked show-less-common-properties
+                 :on-change #(set-show-less-common-properties! not)})
+       "Show less common properties"))
+     (d/h3 "doStuff")
+     (d/div
+      (d/button "Run to Completion")
+      (d/button "Run until Error")
+      (d/button "Cancel"))
+     (d/table
+      (d/thead
+       (d/tr
+        (d/th "Completion Propery")
+        (d/th ".value")
+        (d/th ".error")
+        (d/th ".isSuccessful")
+        (d/th ".isError")))
+      (d/tbody
+       (for [property properties]
+         ($ TaskStateRow {:key (name property)
+                          :label (name property)
+                          :tracker (get instances property)})))))))
+
 (def words ["ember" "tomster" "swag" "yolo" "turbo" "ajax"])
 (def loading-colors ["#ff8888" "#88ff88" "#8888ff"])
 
@@ -422,6 +476,8 @@
    ($ ErrorsVsCancelation)
    (d/h2 "Child Tasks")
    ($ ChildTasks)
+   #_(d/h2 "Derived State")
+   #_($ DerivedState)
    (d/h2 "Awaiting Multiple Child Tasks")
    ($ AwaitingMultipleChildTasks)
    (d/h2 "Happy Eyeballs")

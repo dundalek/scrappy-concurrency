@@ -156,7 +156,7 @@
        Cancellable
        (cancel [_] (cancel-current! !current))))))
 
-(defn enqueued-maybe-start [max-concurrency !current !queue]
+(defn- enqueued-maybe-start [max-concurrency !current !queue]
   (when (< (count @!current) max-concurrency)
     (when-some [task (peek @!queue)]
       (swap! !queue pop)
@@ -164,8 +164,8 @@
                    (fn [_] (enqueued-maybe-start max-concurrency !current !queue))
                    (fn [_])))))
 
-(def empty-queue #?(:cljs #queue []
-                    :clj (clojure.lang.PersistentQueue/EMPTY)))
+(def ^:private empty-queue #?(:cljs #queue []
+                              :clj (clojure.lang.PersistentQueue/EMPTY)))
 
 (defn enqueued
   ([] (enqueued {}))

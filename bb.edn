@@ -1,11 +1,15 @@
 {:tasks {dev
          {:doc "Start shadow-cljs dev server"
-          :task (shell "clojure -M:shadow -m shadow.cljs.devtools.cli watch app test")}
+          :task (shell "clojure -M:shadow -m shadow.cljs.devtools.cli watch app test node-test")}
 
          test
          {:doc  "runs tests"
           :task (clojure {:dir "."} "-M:test")}
 
-         test-watch
+         test:coverage
+         {:doc  "runs tests with coverage"
+          :task (clojure {:dir "."} "-M:test-coverage")}
+
+         test:watch
          {:doc  "runs tests in watch mode"
           :task (clojure {:dir "."} "-M:test --watch")}}}

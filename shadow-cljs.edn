@@ -19,6 +19,9 @@
   :test {:target :browser-test
          :test-dir "build/test"}
 
+  :node-test {:target :node-test
+              :output-to "target/node-tests.js"}
+
   :ci {:target :karma
        :output-to "target/ci.js"
        :compiler-options {:optimizations :simple
